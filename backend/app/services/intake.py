@@ -55,6 +55,24 @@ def _nfc(value: Any) -> Any:
     return unicodedata.normalize("NFC", value) if isinstance(value, str) else value
 
 
+def _fold_name(value: Any) -> str:
+    """Fold a name for duplicate comparison: NFC, trimmed, case-folded."""
+    if not isinstance(value, str):
+        return ""
+    return unicodedata.normalize("NFC", value).strip().casefold()
+
+
+def _content_lock_key(source: str, content_fingerprint: str) -> int:
+    """Contract lock key: signed first 64 bits of the SHA256 digest."""
+    digest = hashlib.sha256(
+        source.encode("utf-8") + b"\x00" + content_fingerprint.encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+CONTENT_WINDOW_SECONDS = 600
+
+
 def _canonical_hash(obj: dict[str, Any]) -> str:
     canonical = json.dumps(
         obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -111,15 +129,6 @@ def submit_intake(
     with session.begin():
         email = normalize_email(payload["email"])
         phone = normalize_phone(payload.get("phone"))
-        decision = evaluate_routing(
-            payload.get("postcode"), payload["service_type"], routing_config
-        )
-        owner_id = intake_repo.get_owner_id(session, decision.owner)
-        if owner_id is None:
-            # Reference data is seeded outside the intake path; a
-            # missing owner is a configuration error, never something
-            # to paper over by creating the row here.
-            raise ValueError(f"routing owner is not seeded: {decision.owner!r}")
 
         canonical_payload: dict[str, Any] = {
             "first_name": _nfc(payload["first_name"]),
@@ -144,13 +153,91 @@ def submit_intake(
         )
         content_fingerprint = _canonical_hash(fingerprint_payload)
 
-        contact_id, contact_version = intake_repo.insert_contact(
-            session,
-            email_norm=email,
-            first_name=canonical_payload["first_name"],
-            last_name=canonical_payload["last_name"],
-            phone_e164=phone,
+        # Serialise identical content before any lookup or write:
+        # the advisory lock is held to commit, so a concurrent twin
+        # always observes the winner's receipt instead of racing it.
+        intake_repo.take_content_lock(
+            session, _content_lock_key(source, content_fingerprint)
         )
+
+        existing = intake_repo.get_receipt_by_key(session, source, event_key)
+        if existing is not None:
+            if existing.payload_hash != payload_hash:
+                raise IdempotencyConflict(
+                    f"event_key {event_key} was used with a different payload"
+                )
+            # Replay: return the original enquiry, write nothing.
+            return IntakeResult(enquiry_id=existing.enquiry_id)
+
+        anchor = intake_repo.get_earliest_receipt_anchor(
+            session, source, content_fingerprint
+        )
+        if anchor is not None and (received_at - anchor.received_at) < timedelta(
+            seconds=CONTENT_WINDOW_SECONDS
+        ):
+            duplicate_id = intake_repo.insert_duplicate_receipt(
+                session,
+                source=source,
+                event_key=event_key,
+                payload_hash=payload_hash,
+                content_fingerprint=content_fingerprint,
+                payload_json=canonical_payload,
+                enquiry_id=anchor.enquiry_id,
+                received_at=received_at,
+            )
+            intake_repo.insert_content_duplicate_event(
+                session,
+                enquiry_id=anchor.enquiry_id,
+                receipt_id=duplicate_id,
+                canonical_enquiry_id=anchor.enquiry_id,
+            )
+            return IntakeResult(enquiry_id=anchor.enquiry_id)
+
+        decision = evaluate_routing(
+            payload.get("postcode"), payload["service_type"], routing_config
+        )
+        owner_id = intake_repo.get_owner_id(session, decision.owner)
+        if owner_id is None:
+            # Reference data is seeded outside the intake path; a
+            # missing owner is a configuration error, never something
+            # to paper over by creating the row here.
+            raise ValueError(f"routing owner is not seeded: {decision.owner!r}")
+
+        existing_contact = intake_repo.get_contact_by_email(session, email)
+        if existing_contact is not None:
+            # Returning customer: reuse the row as-is; its fields are
+            # never modified by a later enquiry.
+            contact_id, contact_version = existing_contact
+            contact_inserted = False
+        else:
+            contact_id, contact_version = intake_repo.insert_contact(
+                session,
+                email_norm=email,
+                first_name=canonical_payload["first_name"],
+                last_name=canonical_payload["last_name"],
+                phone_e164=phone,
+            )
+            contact_inserted = True
+
+        matched_contact_id: uuid.UUID | None = None
+        match_reason: str | None = None
+        if contact_inserted:
+            if phone is not None:
+                matched_contact_id = intake_repo.find_contact_by_phone(
+                    session, phone, exclude_id=contact_id
+                )
+                if matched_contact_id is not None:
+                    match_reason = "same_phone"
+            if matched_contact_id is None:
+                matched_contact_id = intake_repo.find_contact_by_name(
+                    session,
+                    _fold_name(canonical_payload["first_name"]),
+                    _fold_name(canonical_payload["last_name"]),
+                    exclude_id=contact_id,
+                )
+                if matched_contact_id is not None:
+                    match_reason = "same_name"
+
         enquiry_id = intake_repo.insert_enquiry(
             session,
             contact_id=contact_id,
@@ -186,6 +273,13 @@ def submit_intake(
         intake_repo.insert_received_event(
             session, enquiry_id=enquiry_id, source=source
         )
+        if matched_contact_id is not None and match_reason is not None:
+            intake_repo.insert_possible_duplicate_event(
+                session,
+                enquiry_id=enquiry_id,
+                matched_contact_id=matched_contact_id,
+                match_reason=match_reason,
+            )
         create_follow_up_task(
             session,
             enquiry_id,

@@ -6,10 +6,89 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.orm import Session
 
 from app.db import tables
+
+
+def take_content_lock(session: Session, lock_key: int) -> None:
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
+    )
+
+
+def get_receipt_by_key(
+    session: Session, source: str, event_key: uuid.UUID
+) -> Any | None:
+    return session.execute(
+        select(
+            tables.ingestion_receipts.c.enquiry_id,
+            tables.ingestion_receipts.c.payload_hash,
+        ).where(
+            tables.ingestion_receipts.c.source == source,
+            tables.ingestion_receipts.c.event_key == event_key,
+        )
+    ).one_or_none()
+
+
+def get_earliest_receipt_anchor(
+    session: Session, source: str, content_fingerprint: str
+) -> Any | None:
+    return session.execute(
+        select(
+            tables.ingestion_receipts.c.enquiry_id,
+            tables.ingestion_receipts.c.received_at,
+        )
+        .where(
+            tables.ingestion_receipts.c.source == source,
+            tables.ingestion_receipts.c.content_fingerprint
+            == content_fingerprint,
+        )
+        .order_by(tables.ingestion_receipts.c.received_at.asc())
+        .limit(1)
+    ).one_or_none()
+
+
+def get_contact_by_email(
+    session: Session, email_norm: str
+) -> tuple[uuid.UUID, int] | None:
+    row = session.execute(
+        select(tables.contacts.c.id, tables.contacts.c.version).where(
+            tables.contacts.c.email_norm == email_norm
+        )
+    ).one_or_none()
+    return (row.id, row.version) if row is not None else None
+
+
+def find_contact_by_phone(
+    session: Session, phone_e164: str, exclude_id: uuid.UUID
+) -> uuid.UUID | None:
+    return session.execute(
+        select(tables.contacts.c.id).where(
+            tables.contacts.c.phone_e164 == phone_e164,
+            tables.contacts.c.id != exclude_id,
+        )
+    ).scalar_one_or_none()
+
+
+def find_contact_by_name(
+    session: Session,
+    first_name_folded: str,
+    last_name_folded: str,
+    exclude_id: uuid.UUID,
+) -> uuid.UUID | None:
+    return session.execute(
+        select(tables.contacts.c.id).where(
+            func.lower(func.btrim(tables.contacts.c.first_name))
+            == first_name_folded,
+            func.lower(
+                func.btrim(func.coalesce(tables.contacts.c.last_name, ""))
+            )
+            == last_name_folded,
+            tables.contacts.c.id != exclude_id,
+        )
+    ).scalar_one_or_none()
 
 
 def get_owner_id(session: Session, code: str) -> uuid.UUID | None:
@@ -133,6 +212,79 @@ def insert_received_event(
             severity="info",
             actor_type="system",
             details_json={"source": source, "deduplication": "new"},
+        )
+        .returning(tables.activity_events.c.id)
+    ).scalar_one()
+
+
+def insert_duplicate_receipt(
+    session: Session,
+    *,
+    source: str,
+    event_key: uuid.UUID,
+    payload_hash: str,
+    content_fingerprint: str,
+    payload_json: dict[str, Any],
+    enquiry_id: uuid.UUID,
+    received_at: datetime,
+) -> uuid.UUID:
+    return session.execute(
+        insert(tables.ingestion_receipts)
+        .values(
+            source=source,
+            event_key=event_key,
+            payload_hash=payload_hash,
+            content_fingerprint=content_fingerprint,
+            payload_json=payload_json,
+            enquiry_id=enquiry_id,
+            deduplication="content_duplicate",
+            received_at=received_at,
+        )
+        .returning(tables.ingestion_receipts.c.id)
+    ).scalar_one()
+
+
+def insert_content_duplicate_event(
+    session: Session,
+    *,
+    enquiry_id: uuid.UUID,
+    receipt_id: uuid.UUID,
+    canonical_enquiry_id: uuid.UUID,
+) -> uuid.UUID:
+    return session.execute(
+        insert(tables.activity_events)
+        .values(
+            enquiry_id=enquiry_id,
+            event_type="intake.content_duplicate",
+            severity="info",
+            actor_type="system",
+            details_json={
+                "receipt_id": str(receipt_id),
+                "canonical_enquiry_id": str(canonical_enquiry_id),
+            },
+        )
+        .returning(tables.activity_events.c.id)
+    ).scalar_one()
+
+
+def insert_possible_duplicate_event(
+    session: Session,
+    *,
+    enquiry_id: uuid.UUID,
+    matched_contact_id: uuid.UUID,
+    match_reason: str,
+) -> uuid.UUID:
+    return session.execute(
+        insert(tables.activity_events)
+        .values(
+            enquiry_id=enquiry_id,
+            event_type="contact.possible_duplicate",
+            severity="warning",
+            actor_type="system",
+            details_json={
+                "matched_contact_id": str(matched_contact_id),
+                "match_reason": match_reason,
+            },
         )
         .returning(tables.activity_events.c.id)
     ).scalar_one()
