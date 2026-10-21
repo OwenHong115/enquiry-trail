@@ -60,6 +60,9 @@ enquiries = Table(
     Column("rules_hash", String(64), nullable=False),
     Column("requires_review", Boolean, nullable=False),
     Column("review_reason_codes", JSONB, nullable=False),
+    Column("review_resolved_at", DateTime(timezone=True)),
+    Column("review_resolved_by", Uuid),
+    Column("version", Integer, nullable=False),
     Column("received_at", DateTime(timezone=True), nullable=False),
 )
 
@@ -85,7 +88,12 @@ follow_up_tasks = Table(
     Column("kind", Text, nullable=False),
     Column("title", String(200), nullable=False),
     Column("owner_id", Uuid, nullable=False),
+    Column("status", Text, nullable=False),
     Column("due_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True)),
+    Column("cancelled_at", DateTime(timezone=True)),
+    Column("action_reason", String(500)),
+    Column("version", Integer, nullable=False),
 )
 
 jobs = Table(
@@ -107,5 +115,6 @@ activity_events = Table(
     Column("event_type", Text, nullable=False),
     Column("severity", Text, nullable=False),
     Column("actor_type", Text, nullable=False),
+    Column("actor_id", Uuid),
     Column("details_json", JSONB, nullable=False),
 )
