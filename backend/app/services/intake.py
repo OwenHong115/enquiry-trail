@@ -6,6 +6,7 @@ import hashlib
 import json
 import unicodedata
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -24,6 +25,17 @@ from app.ports.clock import BusinessClock
 FOLLOWUP_DUE_MINUTES = 1440
 
 TASK_TITLE = "Initial follow-up"
+
+
+@dataclass(frozen=True)
+class IntakeResult:
+    """Public outcome of one intake submission."""
+
+    enquiry_id: uuid.UUID
+
+
+class IdempotencyConflict(Exception):
+    """The (source, event_key) was already used with a different payload."""
 
 _PAYLOAD_FIELDS = (
     "first_name",
@@ -89,7 +101,7 @@ def submit_intake(
     event_key: uuid.UUID,
     clock: BusinessClock,
     routing_config: dict[str, Any],
-) -> None:
+) -> IntakeResult:
     """Persist one intake: receipt, contact, enquiry and follow-up task.
 
     Everything below commits together in one transaction; any
@@ -180,3 +192,4 @@ def submit_intake(
             owner_id=owner_id,
             due_at=received_at + timedelta(minutes=FOLLOWUP_DUE_MINUTES),
         )
+    return IntakeResult(enquiry_id=enquiry_id)
