@@ -169,7 +169,7 @@ def submit_intake(
             # Replay: return the original enquiry, write nothing.
             return IntakeResult(enquiry_id=existing.enquiry_id)
 
-        anchor = intake_repo.get_earliest_receipt_anchor(
+        anchor = intake_repo.get_canonical_anchor(
             session, source, content_fingerprint
         )
         if anchor is not None and (received_at - anchor.received_at) < timedelta(

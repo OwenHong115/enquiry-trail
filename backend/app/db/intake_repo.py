@@ -32,9 +32,12 @@ def get_receipt_by_key(
     ).one_or_none()
 
 
-def get_earliest_receipt_anchor(
+def get_canonical_anchor(
     session: Session, source: str, content_fingerprint: str
 ) -> Any | None:
+    # The anchor is the most recent canonical receipt: duplicates
+    # never move it, and a fresh canonical receipt (after a window
+    # expired) starts a new chain with its own anchor.
     return session.execute(
         select(
             tables.ingestion_receipts.c.enquiry_id,
@@ -44,8 +47,9 @@ def get_earliest_receipt_anchor(
             tables.ingestion_receipts.c.source == source,
             tables.ingestion_receipts.c.content_fingerprint
             == content_fingerprint,
+            tables.ingestion_receipts.c.deduplication == "new",
         )
-        .order_by(tables.ingestion_receipts.c.received_at.asc())
+        .order_by(tables.ingestion_receipts.c.received_at.desc())
         .limit(1)
     ).one_or_none()
 
