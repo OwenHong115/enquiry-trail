@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db import job_repo
 from app.ports.clock import BusinessClock
+from app.ports.crm import CrmPort
+from app.services import crm_sync
 
 # behavior.yaml#worker.lease_seconds. Lease and heartbeat columns are
 # OperationalClock-owned, so this duration is applied to the database
@@ -70,14 +72,23 @@ def claim_next(
         )
 
 
-def handle_claim(session: Session, claim: ClaimedJob, clock: BusinessClock) -> None:
-    """Execute one claimed job (the local prepare for S4b).
+def handle_claim(
+    session: Session,
+    claim: ClaimedJob,
+    clock: BusinessClock,
+    crm: CrmPort | None = None,
+) -> None:
+    """Execute one claimed job.
 
-    The fence comes first: a single conditional update keyed on the
-    lease token. Zero rows means the lease is stale — write nothing,
-    emit nothing, return quietly.
+    The fence comes first for the local prepare: a single conditional
+    update keyed on the lease token. Zero rows means the lease is
+    stale — write nothing, emit nothing, return quietly. CRM sync
+    jobs dispatch to the sync service instead.
     """
     with session.begin():
+        if claim.kind == "sync_contact":
+            crm_sync.sync_contact(session, claim.entity_id, crm, clock)
+            return
         fenced = job_repo.fence_succeed_job(session, claim.job_id, claim.lease_token)
         if fenced == 0:
             return
