@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import auth, health
+from app.api import auth, health, intake
 from app.api.errors import ApiError, envelope_response, error_response
 from app.db.session import make_engine, make_session_factory
 from app.settings import Settings
@@ -79,4 +79,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(health.router)
+    app.include_router(intake.router)
     return app

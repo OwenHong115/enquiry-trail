@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, sessionmaker
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 TABLES_UNDER_TEST = (
+    "leadops.sessions",
     "leadops.integration_health",
     "leadops.ingestion_receipts",
     "leadops.activity_events",
@@ -170,6 +171,78 @@ def seeded_operator(postgres_db: str) -> object:
     finally:
         engine.dispose()
     return operator_id
+
+
+API_OPERATOR_USERNAME = "intake-operator"
+API_OPERATOR_PASSWORD = "intake-demo-pass"
+
+
+@pytest.fixture()
+def api_operator(postgres_db: str):
+    """Seed the API-suite operator (distinct from the auth suite)."""
+    from app.security.passwords import hash_password
+
+    engine = create_engine(postgres_db)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO leadops.operators (username, password_hash) "
+                    "VALUES (:username, :password_hash) "
+                    "ON CONFLICT (username) DO NOTHING"
+                ),
+                {
+                    "username": API_OPERATOR_USERNAME,
+                    "password_hash": hash_password(API_OPERATOR_PASSWORD),
+                },
+            )
+            operator_id = conn.execute(
+                text(
+                    "SELECT id FROM leadops.operators WHERE username = :username"
+                ),
+                {"username": API_OPERATOR_USERNAME},
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    return operator_id
+
+
+@pytest.fixture()
+def api_client(postgres_db: str, api_operator):
+    """A TestClient already logged in; csrf token on .csrf_token."""
+    from fastapi.testclient import TestClient
+
+    from app.bootstrap import create_app
+    from app.db.session import get_session
+    from app.settings import Settings
+
+    settings = Settings(
+        database_url=postgres_db,
+        app_base_url="http://testserver",
+        session_secret="test-session-secret",
+    )
+    app = create_app(settings)
+    factory = sessionmaker(bind=create_engine(postgres_db))
+
+    def override_session():
+        session = factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_session] = override_session
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": API_OPERATOR_USERNAME,
+                "password": API_OPERATOR_PASSWORD,
+            },
+        )
+        assert response.status_code == 200, response.text
+        client.csrf_token = response.json()["csrf_token"]  # type: ignore[attr-defined]
+        yield client
 
 
 @pytest.fixture()
