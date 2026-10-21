@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, sessionmaker
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 TABLES_UNDER_TEST = (
+    "leadops.integration_health",
     "leadops.ingestion_receipts",
     "leadops.activity_events",
     "leadops.follow_up_tasks",
