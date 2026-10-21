@@ -246,6 +246,43 @@ def test_a04_content_window_anchors_on_first_receipt(postgres_db: str) -> None:
     assert counts["follow_up_tasks"] == 2
 
 
+def test_a04_anchor_resets_per_canonical_chain(postgres_db: str) -> None:
+    factory = sessionmaker(bind=create_engine(postgres_db))
+    clock = FakeClock(CLOCK_START)
+
+    def submit(key: uuid.UUID) -> intake.IntakeResult:
+        session = factory()
+        try:
+            return _submit(session, _payload(), key, clock)
+        finally:
+            session.close()
+
+    first = submit(uuid.uuid4())
+
+    # Past the first window: identical content starts a new
+    # canonical chain with its own enquiry and anchor.
+    clock.advance_by(601)
+    second = submit(uuid.uuid4())
+    assert second.enquiry_id != first.enquiry_id
+
+    # 300s after the SECOND canonical receipt this deduplicates
+    # onto E2. An anchor that stays on the first-ever receipt would
+    # wrongly create a third enquiry here.
+    clock.advance_by(300)
+    third = submit(uuid.uuid4())
+    assert third.enquiry_id == second.enquiry_id
+
+    counts = _counts(postgres_db)
+    assert counts["enquiries"] == 2
+    assert counts["ingestion_receipts"] == 3
+    receipts = _fetch(
+        postgres_db,
+        "SELECT deduplication FROM leadops.ingestion_receipts "
+        "ORDER BY received_at, id",
+    )
+    assert receipts[-1].deduplication == "content_duplicate"
+
+
 def test_a04_content_lock_blocks_concurrent_duplicate(postgres_db: str) -> None:
     factory = sessionmaker(bind=create_engine(postgres_db))
     clock = FakeClock(CLOCK_START)
