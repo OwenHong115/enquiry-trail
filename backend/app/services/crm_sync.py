@@ -25,6 +25,18 @@ if TYPE_CHECKING:
 HTTP_DEADLINE_SECONDS = 15
 
 
+class WriteResultUnknown(Exception):
+    """The provider write may have landed; its result is unknown.
+
+    Carries the external operation id so the worker can move the job
+    to reconciling instead of retrying the write blindly.
+    """
+
+    def __init__(self, operation_id: uuid.UUID) -> None:
+        super().__init__(f"write result unknown for operation {operation_id}")
+        self.operation_id = operation_id
+
+
 def _is_blank(value: str | None) -> bool:
     return value is None or value.strip() == ""
 

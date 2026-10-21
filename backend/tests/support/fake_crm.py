@@ -37,7 +37,13 @@ class FakeCrm:
     probe_ok: bool = True
     error: BaseException | None = None
     lookup_script: list = field(default_factory=list)
+    create_commit_then_error: BaseException | None = None
+    remote_by_email: dict[str, FoundContact] = field(default_factory=dict)
     calls: list[RecordedCall] = field(default_factory=list)
+
+    @property
+    def remote_contact_count(self) -> int:
+        return len(self.remote_by_email)
 
     def calls_of(self, method: str) -> list[RecordedCall]:
         return [call for call in self.calls if call.method == method]
@@ -58,6 +64,8 @@ class FakeCrm:
             if isinstance(item, BaseException):
                 raise item
             return item
+        if email_norm in self.remote_by_email:
+            return self.remote_by_email[email_norm]
         if isinstance(self.by_email, BaseException):
             raise self.by_email
         return self.by_email
@@ -83,13 +91,19 @@ class FakeCrm:
             sent["phone"] = fields.phone
         self.calls.append(RecordedCall("create_contact", sent, context))
         self._maybe_raise()
-        return FoundContact(
+        committed = FoundContact(
             remote_id=self.create_remote_id,
             email=fields.email,
             firstname=fields.firstname,
             lastname=fields.lastname,
             phone=fields.phone,
         )
+        # The remote write commits first; only then may the
+        # scripted error lose the response on the wire.
+        self.remote_by_email[fields.email] = committed
+        if self.create_commit_then_error is not None:
+            raise self.create_commit_then_error
+        return committed
 
     def patch_contact(
         self, remote_id: str, fields: EmptyFieldPatch, context: CallContext
