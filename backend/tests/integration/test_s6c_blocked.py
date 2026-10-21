@@ -217,6 +217,10 @@ def test_a16_failed_probe_keeps_blocking(
     job_ids = _block_provider(postgres_db, clock)
     incident_before = _health_row(postgres_db).incident_id
 
+    claim = _claim(postgres_db, clock)
+    assert claim is not None and claim.job_id == job_ids[1]
+    _handle(postgres_db, claim, clock, FakeCrm())
+
     failing_probe = FakeCrm(probe_ok=False)
     session = _factory(postgres_db)()
     try:
@@ -248,6 +252,11 @@ def test_a16_successful_probe_resumes_and_requeues(
     clock = FakeClock(T0)
     job_ids = _block_provider(postgres_db, clock)
     incident_id = _health_row(postgres_db).incident_id
+
+    claim = _claim(postgres_db, clock)
+    assert claim is not None and claim.job_id == job_ids[1]
+    _handle(postgres_db, claim, clock, FakeCrm())
+
     cycles_before = {job_id: _job(postgres_db, job_id).cycle_no for job_id in job_ids}
 
     clock.advance_by(3600)
