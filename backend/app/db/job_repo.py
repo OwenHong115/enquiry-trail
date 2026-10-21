@@ -68,7 +68,11 @@ def stamp_lease(
             attempt_count=tables.jobs.c.attempt_count + 1,
             cycle_attempt_count=tables.jobs.c.cycle_attempt_count + 1,
         )
-        .returning(tables.jobs.c.attempt_count, tables.jobs.c.cycle_no)
+        .returning(
+            tables.jobs.c.attempt_count,
+            tables.jobs.c.cycle_no,
+            tables.jobs.c.cycle_attempt_count,
+        )
     ).one()
 
 
@@ -186,6 +190,24 @@ def move_job_to_blocked(
     return result.rowcount
 
 
+def move_job_to_dead(
+    session: Session, job_id: uuid.UUID, *, error_code: str
+) -> int:
+    result = session.execute(
+        update(tables.jobs)
+        .where(tables.jobs.c.id == job_id)
+        .values(
+            state="dead",
+            last_error_code=error_code,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+    return result.rowcount
+
+
 def move_job_to_reconciling(
     session: Session,
     job_id: uuid.UUID,
@@ -247,6 +269,30 @@ def insert_retry_scheduled_event(
                 "job_id": str(job_id),
                 "next_attempt_at": next_attempt_at.isoformat(),
                 "attempt_no": attempt_no,
+            },
+        )
+        .returning(tables.activity_events.c.id)
+    ).scalar_one()
+
+
+def insert_job_failed_event(
+    session: Session,
+    *,
+    job_id: uuid.UUID,
+    enquiry_id: uuid.UUID,
+    error_code: str,
+) -> uuid.UUID:
+    return session.execute(
+        insert(tables.activity_events)
+        .values(
+            enquiry_id=enquiry_id,
+            job_id=job_id,
+            event_type="job.failed",
+            severity="error",
+            actor_type="worker",
+            details_json={
+                "job_id": str(job_id),
+                "error_code": error_code,
             },
         )
         .returning(tables.activity_events.c.id)

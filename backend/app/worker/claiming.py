@@ -21,6 +21,11 @@ from app.services.scheduler import BackoffScheduler
 RETRYABLE_CODES = frozenset({"connect_failed", "unavailable", "rate_limited"})
 JITTER_MAX_SECONDS = 0.5
 
+# behavior.yaml#worker.per_cycle_max_attempts. The schema mirrors this
+# as CHECK(cycle_attempt_count BETWEEN 0 AND 4), so the fourth
+# retryable failure in a cycle must end the job instead of rescheduling.
+PER_CYCLE_MAX_ATTEMPTS = 4
+
 # behavior.yaml worker.reconciliation_read_delays_seconds (1/4/16):
 # the first readback follows the unknown at +1s, the next at +4s.
 FIRST_READBACK_DELAY_SECONDS = 1
@@ -42,6 +47,7 @@ class ClaimedJob:
     lease_token: uuid.UUID
     attempt_no: int
     cycle_no: int = 1
+    cycle_attempt_count: int = 1
     state_before_claim: str | None = None
 
 
@@ -86,6 +92,7 @@ def claim_next(
             lease_token=lease_token,
             attempt_no=stamped.attempt_count,
             cycle_no=stamped.cycle_no,
+            cycle_attempt_count=stamped.cycle_attempt_count,
             state_before_claim=job.state,
         )
 
@@ -199,13 +206,35 @@ def handle_claim(
                     return
                 if err.code not in RETRYABLE_CODES:
                     raise
+                if claim.cycle_attempt_count >= PER_CYCLE_MAX_ATTEMPTS:
+                    # Budget exhausted for this cycle: die terminally
+                    # instead of rescheduling, even when the provider
+                    # sent a retry_after. A fifth claim would violate
+                    # the cycle_attempt_count schema check.
+                    job_repo.close_attempt(
+                        session,
+                        job_id=claim.job_id,
+                        attempt_no=claim.attempt_no,
+                        outcome="failed",
+                        error_code=err.code,
+                    )
+                    job_repo.move_job_to_dead(
+                        session, claim.job_id, error_code=err.code
+                    )
+                    job_repo.insert_job_failed_event(
+                        session,
+                        job_id=claim.job_id,
+                        enquiry_id=claim.entity_id,
+                        error_code=err.code,
+                    )
+                    return
                 if err.retry_after_seconds is not None:
                     delay = effective_scheduler.parse_retry_after(
                         str(err.retry_after_seconds), clock.now_utc()
                     )
                 else:
                     delay = effective_scheduler.compute_backoff(
-                        claim.attempt_no, JITTER_MAX_SECONDS
+                        claim.cycle_attempt_count, JITTER_MAX_SECONDS
                     )
                 next_attempt_at = clock.now_utc() + timedelta(seconds=delay)
                 job_repo.close_attempt(
