@@ -9,7 +9,7 @@ def normalize_email(raw: str) -> str:
     Contract: strip + lower; preserve dots/+tag; this is demo identity
     policy.
     """
-    raise NotImplementedError
+    return raw.strip().lower()
 
 
 def normalize_phone(raw: str | None) -> str | None:
