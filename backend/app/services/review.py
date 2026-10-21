@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.db import review_repo
 from app.ports.clock import BusinessClock
-from app.services.errors import VersionConflict
+from app.services.errors import EnquiryNotFound, VersionConflict
 
-__all__ = ["VersionConflict", "resolve_review"]
+__all__ = ["EnquiryNotFound", "VersionConflict", "resolve_review"]
 
 
 def resolve_review(
@@ -26,7 +26,7 @@ def resolve_review(
 
     One transaction: a conditional update keyed on the expected
     version, then exactly one review.resolved event. Zero updated
-    rows means a missing enquiry (ValueError) or a version conflict
+    rows means a missing enquiry (EnquiryNotFound) or a version conflict
     (VersionConflict), with nothing written either way.
     """
     resolved_at = clock.now_utc()
@@ -37,11 +37,12 @@ def resolve_review(
             expected_version=expected_version,
             operator_id=operator_id,
             resolved_at=resolved_at,
+            resolution_note=resolution_note,
         )
         if updated == 0:
             current = review_repo.get_enquiry_version(session, enquiry_id)
             if current is None:
-                raise ValueError(f"enquiry not found: {enquiry_id}")
+                raise EnquiryNotFound(f"enquiry not found: {enquiry_id}")
             raise VersionConflict(
                 f"enquiry {enquiry_id} is at version {current}, "
                 f"not {expected_version}"

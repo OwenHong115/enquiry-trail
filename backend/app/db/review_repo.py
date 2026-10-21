@@ -18,6 +18,7 @@ def conditional_resolve(
     expected_version: int,
     operator_id: uuid.UUID,
     resolved_at: datetime,
+    resolution_note: str,
 ) -> int:
     result = session.execute(
         update(tables.enquiries)
@@ -29,6 +30,7 @@ def conditional_resolve(
             requires_review=False,
             review_resolved_at=resolved_at,
             review_resolved_by=operator_id,
+            resolution_note=resolution_note,
             version=tables.enquiries.c.version + 1,
         )
     )

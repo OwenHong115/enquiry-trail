@@ -1,4 +1,4 @@
-"""Enquiry read route (S7c skeleton; behaviour arrives in Green)."""
+"""Enquiry read route and the shared enquiry-detail builder."""
 
 from __future__ import annotations
 
@@ -91,22 +91,37 @@ class EnquiryDetailOut(BaseModel):
     related_jobs: list
 
 
-@router.get("/{enquiry_id}", response_model=EnquiryDetailOut)
-def get_enquiry(
-    enquiry_id: uuid.UUID,
-    request: Request,
-    session: Session = Depends(get_session),
-):
-    # A live session is required before any lookup (safe method:
-    # no CSRF token is needed).
-    secret = request.app.state.settings.session_secret
-    token = request.cookies.get(COOKIE_NAME)
-    if session_service.resolve_session(session, token, secret) is None:
-        raise ApiError(401, "unauthenticated", "Authentication required")
+def task_out_from_row(task_row) -> TaskOut:
+    """Shape a TaskOut from a task row joined with its owner."""
+    return TaskOut(
+        id=task_row.id,
+        enquiry_id=task_row.enquiry_id,
+        kind=task_row.kind,
+        title=task_row.title,
+        owner=OwnerOut(
+            id=task_row.owner_id,
+            code=task_row.owner_code,
+            display_name=task_row.owner_display_name,
+        ),
+        status=task_row.status,
+        due_at=task_row.due_at,
+        completed_at=task_row.completed_at,
+        cancelled_at=task_row.cancelled_at,
+        version=task_row.version,
+    )
 
+
+def build_enquiry_detail(
+    session: Session, enquiry_id: uuid.UUID
+) -> EnquiryDetailOut | None:
+    """Build the EnquiryDetailOut for an enquiry, or None if absent.
+
+    Shared by the detail route and the review-resolve response so
+    both endpoints shape the detail identically.
+    """
     detail = enquiry_repo.get_enquiry_detail(session, enquiry_id)
     if detail is None:
-        raise ApiError(404, "not_found", "Enquiry not found")
+        return None
 
     link = enquiry_repo.get_crm_link(session, detail.contact_id)
     task_row = enquiry_repo.get_follow_up_task(session, enquiry_id)
@@ -137,24 +152,7 @@ def get_enquiry(
         and link.synced_contact_version >= detail.required_contact_version
     )
 
-    task = None
-    if task_row is not None:
-        task = TaskOut(
-            id=task_row.id,
-            enquiry_id=task_row.enquiry_id,
-            kind=task_row.kind,
-            title=task_row.title,
-            owner=OwnerOut(
-                id=task_row.owner_id,
-                code=task_row.owner_code,
-                display_name=task_row.owner_display_name,
-            ),
-            status=task_row.status,
-            due_at=task_row.due_at,
-            completed_at=task_row.completed_at,
-            cancelled_at=task_row.cancelled_at,
-            version=task_row.version,
-        )
+    task = task_out_from_row(task_row) if task_row is not None else None
 
     return EnquiryDetailOut(
         id=detail.id,
@@ -201,3 +199,22 @@ def get_enquiry(
         required_contact_version=detail.required_contact_version,
         related_jobs=[],
     )
+
+
+@router.get("/{enquiry_id}", response_model=EnquiryDetailOut)
+def get_enquiry(
+    enquiry_id: uuid.UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    # A live session is required before any lookup (safe method:
+    # no CSRF token is needed).
+    secret = request.app.state.settings.session_secret
+    token = request.cookies.get(COOKIE_NAME)
+    if session_service.resolve_session(session, token, secret) is None:
+        raise ApiError(401, "unauthenticated", "Authentication required")
+
+    detail = build_enquiry_detail(session, enquiry_id)
+    if detail is None:
+        raise ApiError(404, "not_found", "Enquiry not found")
+    return detail

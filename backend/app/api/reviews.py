@@ -1,24 +1,25 @@
-"""Review-resolution route (S7d stub; behaviour arrives in Green).
+"""Review-resolution route.
 
 The request model mirrors the ReviewResolve contract. Session and
-CSRF are enforced here, before the handler, so those failures are
-already observable; the resolution itself is not implemented yet.
+CSRF are enforced via the shared require_operator dependency; the
+resolution itself is the S4a review service, and the 200 response
+reuses the enquiry-detail builder.
 """
 
 from __future__ import annotations
 
-import hmac
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.api.auth import COOKIE_NAME
-from app.api.enquiries import EnquiryDetailOut
+from app.api.deps import require_operator
+from app.api.enquiries import EnquiryDetailOut, build_enquiry_detail
 from app.api.errors import ApiError
 from app.db.session import get_session
-from app.security import sessions as session_service
+from app.services.errors import EnquiryNotFound, VersionConflict
+from app.services.review import resolve_review
 
 router = APIRouter(prefix="/api/v1/enquiries", tags=["reviews"])
 
@@ -28,21 +29,6 @@ class ReviewResolveIn(BaseModel):
 
     expected_version: int = Field(ge=1)
     resolution_note: str = Field(min_length=10, max_length=500)
-
-
-def require_operator(
-    request: Request, session: Session, csrf_token: str | None
-):
-    """Resolve the session, then check CSRF (401 before 403)."""
-    cookie_token = request.cookies.get(COOKIE_NAME)
-    secret = request.app.state.settings.session_secret
-    resolved = session_service.resolve_session(session, cookie_token, secret)
-    if resolved is None:
-        raise ApiError(401, "unauthenticated", "Authentication required")
-    expected_csrf = session_service.derive_csrf(cookie_token, secret)
-    if not csrf_token or not hmac.compare_digest(csrf_token, expected_csrf):
-        raise ApiError(403, "csrf_invalid", "CSRF token is missing or invalid")
-    return resolved
 
 
 @router.post(
@@ -55,5 +41,27 @@ def resolve_review_route(
     session: Session = Depends(get_session),
     csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
 ):
-    require_operator(request, session, csrf_token)
-    raise NotImplementedError
+    resolved = require_operator(request, session, csrf_token)
+    # Auth reads opened a read transaction; end it so the service
+    # can own its single write transaction.
+    session.rollback()
+    try:
+        resolve_review(
+            session,
+            enquiry_id,
+            expected_version=payload.expected_version,
+            operator_id=resolved.operator_id,
+            resolution_note=payload.resolution_note,
+            clock=request.app.state.clock,
+        )
+    except EnquiryNotFound as err:
+        raise ApiError(404, "not_found", "Enquiry not found") from err
+    except VersionConflict as err:
+        raise ApiError(
+            409, "version_conflict", "Enquiry version conflict"
+        ) from err
+
+    detail = build_enquiry_detail(session, enquiry_id)
+    if detail is None:  # pragma: no cover - resolved a moment ago
+        raise ApiError(404, "not_found", "Enquiry not found")
+    return detail

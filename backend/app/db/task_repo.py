@@ -26,6 +26,31 @@ def get_task_for_update(
     ).one_or_none()
 
 
+def get_task_with_owner(
+    session: Session, task_id: uuid.UUID
+) -> Any | None:
+    """Read one task with its owner, for shaping a Task response."""
+    owner = tables.owners.alias("task_detail_owner")
+    return session.execute(
+        select(
+            tables.follow_up_tasks.c.id,
+            tables.follow_up_tasks.c.enquiry_id,
+            tables.follow_up_tasks.c.kind,
+            tables.follow_up_tasks.c.title,
+            tables.follow_up_tasks.c.status,
+            tables.follow_up_tasks.c.due_at,
+            tables.follow_up_tasks.c.completed_at,
+            tables.follow_up_tasks.c.cancelled_at,
+            tables.follow_up_tasks.c.version,
+            owner.c.id.label("owner_id"),
+            owner.c.code.label("owner_code"),
+            owner.c.display_name.label("owner_display_name"),
+        )
+        .join(owner, owner.c.id == tables.follow_up_tasks.c.owner_id)
+        .where(tables.follow_up_tasks.c.id == task_id)
+    ).one_or_none()
+
+
 def update_task_terminal(
     session: Session,
     task_id: uuid.UUID,

@@ -8,9 +8,15 @@ from sqlalchemy.orm import Session
 
 from app.db import task_repo
 from app.ports.clock import BusinessClock
-from app.services.errors import VersionConflict
+from app.services.errors import TaskNotFound, VersionConflict
 
-__all__ = ["TerminalConflict", "VersionConflict", "cancel_task", "complete_task"]
+__all__ = [
+    "TaskNotFound",
+    "TerminalConflict",
+    "VersionConflict",
+    "cancel_task",
+    "complete_task",
+]
 
 
 class TerminalConflict(Exception):
@@ -31,7 +37,7 @@ def _terminal_action(
     with session.begin():
         task = task_repo.get_task_for_update(session, task_id)
         if task is None:
-            raise ValueError(f"follow-up task not found: {task_id}")
+            raise TaskNotFound(f"follow-up task not found: {task_id}")
         # Status is decided before version: repeating the same
         # terminal action returns the original result with no write,
         # no event and no version check, however stale the caller's
