@@ -143,6 +143,35 @@ def _seed_reference_owners(
 
 
 @pytest.fixture()
+def seeded_operator(postgres_db: str) -> object:
+    """Seed the one reference operator and return its id.
+
+    Operators are reference data like owners: services resolve them,
+    they never create them. The password hash is a placeholder; no
+    login behaviour exists in these slices.
+    """
+    engine = create_engine(postgres_db)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO leadops.operators (username, password_hash) "
+                    "VALUES ('demo-operator', 'placeholder-not-a-real-hash') "
+                    "ON CONFLICT (username) DO NOTHING"
+                )
+            )
+            operator_id = conn.execute(
+                text(
+                    "SELECT id FROM leadops.operators "
+                    "WHERE username = 'demo-operator'"
+                )
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    return operator_id
+
+
+@pytest.fixture()
 def db_session(postgres_db: str) -> Iterator[Session]:
     engine = create_engine(postgres_db)
     factory = sessionmaker(bind=engine)
