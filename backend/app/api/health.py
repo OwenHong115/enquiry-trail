@@ -14,4 +14,4 @@ class HealthOut(BaseModel):
 
 @router.get("/live", response_model=HealthOut)
 def live():
-    raise NotImplementedError
+    return HealthOut(status="ok")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -41,8 +43,20 @@ def error_body(
 
 
 def error_response(request: Request, err: ApiError) -> JSONResponse:
-    request_id = getattr(request.state, "request_id", "")
+    return envelope_response(
+        request, err.status_code, err.code, err.message, err.field_errors
+    )
+
+
+def envelope_response(
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    field_errors: list[dict[str, str]] | None = None,
+) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", "") or str(uuid.uuid4())
     return JSONResponse(
-        status_code=err.status_code,
-        content=error_body(err.code, err.message, request_id, err.field_errors),
+        status_code=status_code,
+        content=error_body(code, message, request_id, field_errors),
     )

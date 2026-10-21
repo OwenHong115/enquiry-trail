@@ -159,6 +159,26 @@ job_attempts = Table(
     Column("error_code", Text),
 )
 
+operators = Table(
+    "operators",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("username", String(80), nullable=False),
+    Column("password_hash", Text, nullable=False),
+    Column("active", Boolean, nullable=False),
+)
+
+sessions = Table(
+    "sessions",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("token_hash", String(64), nullable=False),
+    Column("operator_id", Uuid, nullable=False),
+    Column("csrf_hash", String(64), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("revoked_at", DateTime(timezone=True)),
+)
+
 integration_health = Table(
     "integration_health",
     metadata,

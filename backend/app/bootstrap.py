@@ -5,10 +5,24 @@ from __future__ import annotations
 import uuid
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import auth, health
+from app.api.errors import ApiError, envelope_response, error_response
 from app.db.session import make_engine, make_session_factory
 from app.settings import Settings
+
+_HTTP_CODE_MAP = {
+    400: "validation_failed",
+    401: "unauthenticated",
+    403: "csrf_invalid",
+    404: "not_found",
+    405: "not_found",
+    409: "version_conflict",
+    413: "payload_too_large",
+    429: "rate_limited",
+}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -25,6 +39,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
         return response
+
+    @app.exception_handler(ApiError)
+    async def api_error_handler(request: Request, exc: ApiError):
+        return error_response(request, exc)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_handler(request: Request, exc: RequestValidationError):
+        field_errors = [
+            {
+                "path": ".".join(str(part) for part in error["loc"]),
+                "message": error["msg"],
+            }
+            for error in exc.errors()
+        ]
+        return envelope_response(
+            request,
+            422,
+            "validation_failed",
+            "Request validation failed",
+            field_errors,
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        code = _HTTP_CODE_MAP.get(
+            exc.status_code,
+            "internal_error" if exc.status_code >= 500 else "not_found",
+        )
+        return envelope_response(
+            request, exc.status_code, code, "Request failed"
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_handler(request: Request, exc: Exception):
+        return envelope_response(
+            request, 500, "internal_error", "Internal server error"
+        )
 
     app.include_router(auth.router)
     app.include_router(health.router)
