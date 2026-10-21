@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.auth import COOKIE_NAME
+from app.api.display import format_display_no
+from app.api.errors import ApiError
+from app.db import enquiry_repo
 from app.db.session import get_session
+from app.security import sessions as session_service
 
 router = APIRouter(prefix="/api/v1/enquiries", tags=["enquiries"])
 
@@ -92,4 +97,107 @@ def get_enquiry(
     request: Request,
     session: Session = Depends(get_session),
 ):
-    raise NotImplementedError
+    # A live session is required before any lookup (safe method:
+    # no CSRF token is needed).
+    secret = request.app.state.settings.session_secret
+    token = request.cookies.get(COOKIE_NAME)
+    if session_service.resolve_session(session, token, secret) is None:
+        raise ApiError(401, "unauthenticated", "Authentication required")
+
+    detail = enquiry_repo.get_enquiry_detail(session, enquiry_id)
+    if detail is None:
+        raise ApiError(404, "not_found", "Enquiry not found")
+
+    link = enquiry_repo.get_crm_link(session, detail.contact_id)
+    task_row = enquiry_repo.get_follow_up_task(session, enquiry_id)
+
+    if link is None:
+        crm = CrmOut(
+            status="pending",
+            remote_id=None,
+            remote_url=None,
+            synced_contact_version=0,
+            next_attempt_at=None,
+            last_error_code=None,
+        )
+    else:
+        crm = CrmOut(
+            status=link.sync_status,
+            remote_id=link.remote_id,
+            remote_url=None,
+            synced_contact_version=link.synced_contact_version,
+            next_attempt_at=None,
+            last_error_code=link.last_error_code,
+        )
+
+    prepared_and_synced = (
+        detail.local_prepared_at is not None
+        and link is not None
+        and link.sync_status == "synced"
+        and link.synced_contact_version >= detail.required_contact_version
+    )
+
+    task = None
+    if task_row is not None:
+        task = TaskOut(
+            id=task_row.id,
+            enquiry_id=task_row.enquiry_id,
+            kind=task_row.kind,
+            title=task_row.title,
+            owner=OwnerOut(
+                id=task_row.owner_id,
+                code=task_row.owner_code,
+                display_name=task_row.owner_display_name,
+            ),
+            status=task_row.status,
+            due_at=task_row.due_at,
+            completed_at=task_row.completed_at,
+            cancelled_at=task_row.cancelled_at,
+            version=task_row.version,
+        )
+
+    return EnquiryDetailOut(
+        id=detail.id,
+        display_no=format_display_no(detail.display_no),
+        contact=ContactOut(
+            id=detail.contact_id,
+            email=detail.email_norm,
+            first_name=detail.first_name,
+            last_name=detail.last_name,
+            phone_e164=detail.phone_e164,
+            version=detail.contact_version,
+        ),
+        service_type=detail.service_type,
+        postcode=detail.postcode,
+        owner=(
+            OwnerOut(
+                id=detail.owner_id,
+                code=detail.owner_code,
+                display_name=detail.owner_display_name,
+            )
+            if detail.owner_id is not None
+            else None
+        ),
+        processing_summary="ready" if prepared_and_synced else "processing",
+        attention="none",
+        requires_review=detail.requires_review,
+        crm=crm,
+        received_at=detail.received_at,
+        version=detail.version,
+        message=detail.message,
+        preferred_contact=detail.preferred_contact,
+        scenario_run_id=detail.scenario_run_id,
+        routing_reason=detail.routing_reason,
+        rules_hash=detail.rules_hash,
+        review_reason_codes=detail.review_reason_codes,
+        review_resolution_note=detail.resolution_note,
+        task=task,
+        enrichment=None,
+        draft=None,
+        notification=NotificationOut(
+            status="disabled", notification_id=None, last_error_code=None
+        ),
+        local_prepared_at=detail.local_prepared_at,
+        required_contact_version=detail.required_contact_version,
+        related_jobs=[],
+    )

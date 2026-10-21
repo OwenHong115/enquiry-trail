@@ -51,6 +51,8 @@ enquiries = Table(
     Column("display_no", Integer),
     Column("contact_id", Uuid, nullable=False),
     Column("required_contact_version", Integer, nullable=False),
+    Column("scenario_run_id", Uuid),
+    Column("resolution_note", String(500)),
     Column("source", String(40), nullable=False),
     Column("service_type", Text, nullable=False),
     Column("postcode", String(4)),
@@ -97,6 +99,7 @@ follow_up_tasks = Table(
     Column("cancelled_at", DateTime(timezone=True)),
     Column("action_reason", String(500)),
     Column("version", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 jobs = Table(
@@ -144,6 +147,7 @@ crm_links = Table(
     Column("sync_status", Text, nullable=False),
     Column("synced_contact_version", Integer, nullable=False),
     Column("last_synced_at", DateTime(timezone=True)),
+    Column("last_error_code", Text),
     Column("version", Integer, nullable=False),
 )
 

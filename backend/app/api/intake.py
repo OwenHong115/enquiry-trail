@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.auth import COOKIE_NAME
+from app.api.display import format_display_no
 from app.api.errors import ApiError
 from app.db.session import get_session
 from app.domain.normalization import normalize_phone
@@ -116,7 +117,7 @@ def intake_form(
     return IntakeReceiptOut(
         receipt_id=result.receipt_id,
         enquiry_id=result.enquiry_id,
-        display_no=f"ENQ-{result.display_no:06d}",
+        display_no=format_display_no(result.display_no),
         accepted=True,
         replayed=result.replayed,
         deduplication=result.deduplication,  # type: ignore[arg-type]
