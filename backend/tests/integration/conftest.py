@@ -26,10 +26,17 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 TABLES_UNDER_TEST = (
     "leadops.ingestion_receipts",
+    "leadops.activity_events",
     "leadops.follow_up_tasks",
     "leadops.jobs",
     "leadops.enquiries",
     "leadops.contacts",
+)
+
+REFERENCE_OWNERS = (
+    ("intake", "Intake Desk"),
+    ("maya", "Maya Chen"),
+    ("oliver", "Oliver Reed"),
 )
 
 
@@ -107,6 +114,29 @@ def _truncate_tables(postgres_db: str) -> Iterator[None]:
                     + " RESTART IDENTITY CASCADE"
                 )
             )
+    finally:
+        engine.dispose()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _seed_reference_owners(
+    postgres_db: str, _truncate_tables: None
+) -> Iterator[None]:
+    # Reference data only: the intake service resolves owners by code
+    # and must never create them, so the harness seeds them instead.
+    engine = create_engine(postgres_db)
+    try:
+        with engine.begin() as conn:
+            for code, display_name in REFERENCE_OWNERS:
+                conn.execute(
+                    text(
+                        "INSERT INTO leadops.owners (code, display_name) "
+                        "VALUES (:code, :display_name) "
+                        "ON CONFLICT (code) DO NOTHING"
+                    ),
+                    {"code": code, "display_name": display_name},
+                )
     finally:
         engine.dispose()
     yield

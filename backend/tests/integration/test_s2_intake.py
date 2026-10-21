@@ -11,6 +11,14 @@ A01 also requires a "detail_ready schema": that is an API response
 shape and is proven at the API slice. It is deliberately not faked
 here. A25's 503 mapping is likewise API-level and is not asserted
 here; this file proves atomicity only.
+
+Recorded ambiguity (not resolved here): the intake contract lists
+"initial_jobs" in the atomic unit without enumerating the set, so
+the jobs assertions below require at least one prepare_enquiry job
+and deliberately do not pin the total job count or require a
+sync_contact job. Likewise the activity assertions require at
+least one enquiry.received event without pinning the total event
+count, since intake may or may not also emit task.created.
 """
 
 from __future__ import annotations
@@ -111,8 +119,9 @@ def test_a01_submit_persists_receipt_contact_enquiry_and_task(
             ).one()
             enquiry = conn.execute(
                 text(
-                    "SELECT o.code AS owner_code, e.routing_reason, "
-                    "e.rules_hash, e.required_contact_version, e.received_at "
+                    "SELECT e.id AS enquiry_id, o.code AS owner_code, "
+                    "e.routing_reason, e.rules_hash, "
+                    "e.required_contact_version, e.received_at "
                     "FROM leadops.enquiries e "
                     "JOIN leadops.owners o ON o.id = e.owner_id"
                 )
@@ -123,6 +132,20 @@ def test_a01_submit_persists_receipt_contact_enquiry_and_task(
                     "FROM leadops.ingestion_receipts"
                 )
             ).one()
+            jobs = conn.execute(
+                text(
+                    "SELECT kind, state, entity_id, next_attempt_at "
+                    "FROM leadops.jobs WHERE entity_id = :enquiry_id"
+                ),
+                {"enquiry_id": enquiry.enquiry_id},
+            ).all()
+            received_events = conn.execute(
+                text(
+                    "SELECT event_type, actor_type, severity, enquiry_id, "
+                    "details_json FROM leadops.activity_events "
+                    "WHERE event_type = 'enquiry.received'"
+                )
+            ).all()
     finally:
         engine.dispose()
 
@@ -143,6 +166,29 @@ def test_a01_submit_persists_receipt_contact_enquiry_and_task(
     # clock_start); neither may come from wall-clock time.
     assert receipt.received_at == CLOCK_START
     assert enquiry.received_at == CLOCK_START
+    # Contract: the atomic unit includes initial jobs. The contract
+    # does not enumerate the set (see module docstring), so this
+    # requires at least one pending prepare_enquiry job for this
+    # enquiry, due at the BusinessClock instant, and pins no total.
+    assert len(jobs) >= 1
+    assert any(
+        job.kind == "prepare_enquiry"
+        and job.state == "pending"
+        and job.entity_id == enquiry.enquiry_id
+        and job.next_attempt_at == CLOCK_START
+        for job in jobs
+    )
+    # Contract: the atomic unit includes activity. At least one
+    # enquiry.received event from the system actor at info severity,
+    # attached to this enquiry, carrying source and the deduplication
+    # outcome. Total event count is not pinned (see docstring).
+    assert len(received_events) >= 1
+    event = received_events[0]
+    assert event.actor_type == "system"
+    assert event.severity == "info"
+    assert event.enquiry_id == enquiry.enquiry_id
+    assert event.details_json["source"] == SOURCE
+    assert event.details_json["deduplication"] == "new"
 
 
 def test_a25_failed_task_insert_leaves_no_partial_intake(
