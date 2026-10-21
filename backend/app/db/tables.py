@@ -159,6 +159,18 @@ job_attempts = Table(
     Column("error_code", Text),
 )
 
+integration_health = Table(
+    "integration_health",
+    metadata,
+    Column("provider", Text, primary_key=True),
+    Column("status", Text, nullable=False),
+    Column("incident_id", Uuid),
+    Column("last_success_at", DateTime(timezone=True)),
+    Column("last_error_code", Text),
+    Column("blocked_at", DateTime(timezone=True)),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
 activity_events = Table(
     "activity_events",
     metadata,

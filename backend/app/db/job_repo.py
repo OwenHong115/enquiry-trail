@@ -168,6 +168,24 @@ def schedule_job_retry(
     return result.rowcount
 
 
+def move_job_to_blocked(
+    session: Session, job_id: uuid.UUID, *, error_code: str
+) -> int:
+    result = session.execute(
+        update(tables.jobs)
+        .where(tables.jobs.c.id == job_id)
+        .values(
+            state="blocked",
+            last_error_code=error_code,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+    return result.rowcount
+
+
 def move_job_to_reconciling(
     session: Session,
     job_id: uuid.UUID,

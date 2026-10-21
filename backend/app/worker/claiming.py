@@ -13,7 +13,7 @@ from app.db import crm_repo, job_repo
 from app.ports.clock import BusinessClock
 from app.ports.crm import CrmPort, ProviderError
 from app.ports.scheduler import Scheduler
-from app.services import crm_sync
+from app.services import crm_sync, health
 from app.services.scheduler import BackoffScheduler
 
 # The retryable-before-write set for this slice, and the worker
@@ -141,6 +141,21 @@ def handle_claim(
                     outcome="succeeded",
                 )
                 return
+            if health.is_blocked(session):
+                # Defence in depth: a job claimed before the block
+                # (or raced against it) is re-blocked without ever
+                # reaching the provider.
+                job_repo.close_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    attempt_no=claim.attempt_no,
+                    outcome="blocked",
+                    error_code="auth_failed",
+                )
+                job_repo.move_job_to_blocked(
+                    session, claim.job_id, error_code="auth_failed"
+                )
+                return
             try:
                 crm_sync.sync_contact(session, claim, crm, clock)
             except crm_sync.WriteResultUnknown as unknown:
@@ -166,6 +181,22 @@ def handle_claim(
                 )
                 return
             except ProviderError as err:
+                if err.code == "auth_failed":
+                    # Never retried: block the job and the provider.
+                    job_repo.close_attempt(
+                        session,
+                        job_id=claim.job_id,
+                        attempt_no=claim.attempt_no,
+                        outcome="blocked",
+                        error_code="auth_failed",
+                    )
+                    job_repo.move_job_to_blocked(
+                        session, claim.job_id, error_code="auth_failed"
+                    )
+                    health.block_provider(
+                        session, enquiry_id=claim.entity_id
+                    )
+                    return
                 if err.code not in RETRYABLE_CODES:
                     raise
                 if err.retry_after_seconds is not None:
