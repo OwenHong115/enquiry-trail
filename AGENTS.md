@@ -1,4 +1,6 @@
-# LeadOps Kit — Demo 1
+# EnquiryTrail — Demo 1
+
+The repository name is the product name; internal identifiers (schema, database, package, test prefix) stay `leadops` to match the contract package.
 
 Local single-operator demo of a lead intake pipeline for a fictional
 renovation company. Python backend under `backend/`.

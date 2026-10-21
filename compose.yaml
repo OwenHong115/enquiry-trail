@@ -1,3 +1,5 @@
+name: enquirytrail
+
 services:
   db:
     image: postgres:16
