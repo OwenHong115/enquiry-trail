@@ -75,6 +75,9 @@ Retryable failures wait 1/4/16 seconds; a lost create response is reconciled by 
   600 s content-dedup window anchored on the most recent canonical receipt.
 - Tests assert persisted facts and public outputs. Private call counts and SQL text are
   forbidden.
+- Known divergence: owner, routing and the follow-up task are created in the intake
+  transaction, not by the prepare job. The `processing` detail state with null owner and
+  null task is therefore not reachable in this build; do not "fix" intake to match it.
 
 ## State
 
