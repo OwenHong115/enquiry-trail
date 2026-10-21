@@ -118,6 +118,21 @@ jobs = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
+external_operations = Table(
+    "external_operations",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("job_id", Uuid, nullable=False),
+    Column("operation_key", String(500), nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("verb", String(20), nullable=False),
+    Column("request_hash", String(64), nullable=False),
+    Column("status", Text, nullable=False),
+    Column("remote_id", String(128)),
+    Column("attempt_count", Integer, nullable=False),
+    Column("last_checked_at", DateTime(timezone=True)),
+)
+
 crm_links = Table(
     "crm_links",
     metadata,

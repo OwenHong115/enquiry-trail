@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 
 from sqlalchemy.orm import Session
@@ -15,6 +17,7 @@ from app.ports.crm import (
     EmptyFieldPatch,
     FoundContact,
     NotFound,
+    ProviderError,
 )
 from typing import TYPE_CHECKING
 
@@ -39,6 +42,13 @@ class WriteResultUnknown(Exception):
 
 def _is_blank(value: str | None) -> bool:
     return value is None or value.strip() == ""
+
+
+def _request_hash(fields: dict[str, str]) -> str:
+    canonical = json.dumps(
+        fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _mask(value: str) -> str:
@@ -78,15 +88,38 @@ def sync_contact(
 
     found = crm.get_contact_by_email(contact.email_norm, context)
     if isinstance(found, NotFound):
-        created = crm.create_contact(
-            CreateContact(
-                email=contact.email_norm,
-                firstname=contact.first_name,
-                lastname=contact.last_name,
-                phone=contact.phone_e164,
+        sent_fields: dict[str, str] = {
+            "email": contact.email_norm,
+            "firstname": contact.first_name,
+        }
+        if contact.last_name is not None:
+            sent_fields["lastname"] = contact.last_name
+        if contact.phone_e164 is not None:
+            sent_fields["phone"] = contact.phone_e164
+        operation_id = crm_repo.insert_operation_intent(
+            session,
+            job_id=claim.job_id,
+            operation_key=(
+                f"hubspot:create:{contact.contact_id}:v{contact.version}"
             ),
-            context,
+            request_hash=_request_hash(sent_fields),
         )
+        try:
+            created = crm.create_contact(
+                CreateContact(
+                    email=contact.email_norm,
+                    firstname=contact.first_name,
+                    lastname=contact.last_name,
+                    phone=contact.phone_e164,
+                ),
+                context,
+            )
+        except ProviderError as err:
+            if err.code == "result_unknown":
+                crm_repo.set_operation_unknown(session, operation_id)
+                raise WriteResultUnknown(operation_id) from err
+            raise
+        crm_repo.set_operation_succeeded(session, operation_id, created.remote_id)
         remote_id = created.remote_id
     elif isinstance(found, FoundContact):
         remote_id = found.remote_id
@@ -141,3 +174,58 @@ def sync_contact(
         remote_id=remote_id,
         contact_version=contact.version,
     )
+
+
+def reconcile_unknown(
+    session: Session,
+    claim: ClaimedJob,
+    crm: CrmPort,
+    clock: BusinessClock,
+) -> bool:
+    """Read back an unknown create by email. True when reconciled.
+
+    Never creates: a NotFound readback only stamps the operation so
+    the handler can reschedule the next readback.
+    """
+    contact = crm_repo.get_enquiry_contact(session, claim.entity_id)
+    if contact is None:
+        raise ValueError(f"enquiry not found: {claim.entity_id}")
+    operation = crm_repo.get_unknown_operation_by_job(session, claim.job_id)
+    if operation is None:
+        raise ValueError(f"no unknown operation for job {claim.job_id}")
+
+    context = CallContext(
+        scenario_run_id=None,
+        job_id=claim.job_id,
+        cycle_no=claim.cycle_no,
+        attempt_no=claim.attempt_no,
+        external_operation_id=operation.id,
+        deadline_seconds=HTTP_DEADLINE_SECONDS,
+    )
+    found = crm.get_contact_by_email(contact.email_norm, context)
+    if isinstance(found, NotFound):
+        crm_repo.touch_operation_readback(session, operation.id)
+        return False
+    if not isinstance(found, FoundContact):  # pragma: no cover
+        raise ValueError(f"unexpected CRM lookup result: {found!r}")
+
+    crm_repo.upsert_crm_link(
+        session,
+        contact_id=contact.contact_id,
+        remote_id=found.remote_id,
+        synced_contact_version=contact.version,
+    )
+    crm_repo.set_operation_reconciled(session, operation.id, found.remote_id)
+    crm_repo.insert_recovered_event(
+        session,
+        enquiry_id=claim.entity_id,
+        operation_id=operation.id,
+        remote_id=found.remote_id,
+    )
+    crm_repo.insert_synced_event(
+        session,
+        enquiry_id=claim.entity_id,
+        remote_id=found.remote_id,
+        contact_version=contact.version,
+    )
+    return True

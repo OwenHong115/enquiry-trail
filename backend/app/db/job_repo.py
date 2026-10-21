@@ -36,6 +36,10 @@ def select_claimable(session: Session, due_before: datetime) -> Any | None:
                 (tables.jobs.c.state == "waiting_retry")
                 & (tables.jobs.c.next_attempt_at <= due_before)
             )
+            | (
+                (tables.jobs.c.state == "reconciling")
+                & (tables.jobs.c.next_attempt_at <= due_before)
+            )
         )
         .order_by(
             tables.jobs.c.next_attempt_at,
@@ -155,6 +159,47 @@ def schedule_job_retry(
             state="waiting_retry",
             next_attempt_at=next_attempt_at,
             last_error_code=error_code,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+    return result.rowcount
+
+
+def move_job_to_reconciling(
+    session: Session,
+    job_id: uuid.UUID,
+    *,
+    next_attempt_at: datetime,
+    error_code: str,
+) -> int:
+    result = session.execute(
+        update(tables.jobs)
+        .where(tables.jobs.c.id == job_id)
+        .values(
+            state="reconciling",
+            next_attempt_at=next_attempt_at,
+            last_error_code=error_code,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+    return result.rowcount
+
+
+def reschedule_reconciling_job(
+    session: Session, job_id: uuid.UUID, *, next_attempt_at: datetime
+) -> int:
+    result = session.execute(
+        update(tables.jobs)
+        .where(tables.jobs.c.id == job_id)
+        .values(
+            state="reconciling",
+            next_attempt_at=next_attempt_at,
             lease_token=None,
             lease_until=None,
             heartbeat_at=None,

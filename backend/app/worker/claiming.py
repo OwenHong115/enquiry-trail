@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from datetime import timedelta
 
-from app.db import job_repo
+from app.db import crm_repo, job_repo
 from app.ports.clock import BusinessClock
 from app.ports.crm import CrmPort, ProviderError
 from app.ports.scheduler import Scheduler
@@ -20,6 +20,11 @@ from app.services.scheduler import BackoffScheduler
 # contract's jitter maximum (behavior.yaml worker.jitter_max_seconds).
 RETRYABLE_CODES = frozenset({"connect_failed", "unavailable", "rate_limited"})
 JITTER_MAX_SECONDS = 0.5
+
+# behavior.yaml worker.reconciliation_read_delays_seconds (1/4/16):
+# the first readback follows the unknown at +1s, the next at +4s.
+FIRST_READBACK_DELAY_SECONDS = 1
+READBACK_DELAY_SECONDS = 4
 
 # behavior.yaml#worker.lease_seconds. Lease and heartbeat columns are
 # OperationalClock-owned, so this duration is applied to the database
@@ -37,6 +42,7 @@ class ClaimedJob:
     lease_token: uuid.UUID
     attempt_no: int
     cycle_no: int = 1
+    state_before_claim: str | None = None
 
 
 def claim_next(
@@ -80,6 +86,7 @@ def claim_next(
             lease_token=lease_token,
             attempt_no=stamped.attempt_count,
             cycle_no=stamped.cycle_no,
+            state_before_claim=job.state,
         )
 
 
@@ -107,8 +114,57 @@ def handle_claim(
             if crm is None:
                 raise ValueError("sync_contact requires a CRM port")
             effective_scheduler = scheduler or BackoffScheduler()
+            if claim.state_before_claim == "reconciling":
+                reconciled = crm_sync.reconcile_unknown(
+                    session, claim, crm, clock
+                )
+                if not reconciled:
+                    job_repo.close_attempt(
+                        session,
+                        job_id=claim.job_id,
+                        attempt_no=claim.attempt_no,
+                        outcome="readback_not_found",
+                    )
+                    job_repo.reschedule_reconciling_job(
+                        session,
+                        claim.job_id,
+                        next_attempt_at=clock.now_utc()
+                        + timedelta(seconds=READBACK_DELAY_SECONDS),
+                    )
+                    return
+                # Reconciled: fall through to the success marking.
+                job_repo.mark_job_succeeded(session, claim.job_id)
+                job_repo.close_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    attempt_no=claim.attempt_no,
+                    outcome="succeeded",
+                )
+                return
             try:
                 crm_sync.sync_contact(session, claim, crm, clock)
+            except crm_sync.WriteResultUnknown as unknown:
+                job_repo.close_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    attempt_no=claim.attempt_no,
+                    outcome="failed",
+                    error_code="result_unknown",
+                )
+                job_repo.move_job_to_reconciling(
+                    session,
+                    claim.job_id,
+                    next_attempt_at=clock.now_utc()
+                    + timedelta(seconds=FIRST_READBACK_DELAY_SECONDS),
+                    error_code="result_unknown",
+                )
+                crm_repo.insert_operation_unknown_event(
+                    session,
+                    job_id=claim.job_id,
+                    enquiry_id=claim.entity_id,
+                    operation_id=unknown.operation_id,
+                )
+                return
             except ProviderError as err:
                 if err.code not in RETRYABLE_CODES:
                     raise
