@@ -48,6 +48,7 @@ enquiries = Table(
     "enquiries",
     metadata,
     Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("display_no", Integer),
     Column("contact_id", Uuid, nullable=False),
     Column("required_contact_version", Integer, nullable=False),
     Column("source", String(40), nullable=False),

@@ -23,6 +23,7 @@ def get_receipt_by_key(
 ) -> Any | None:
     return session.execute(
         select(
+            tables.ingestion_receipts.c.id,
             tables.ingestion_receipts.c.enquiry_id,
             tables.ingestion_receipts.c.payload_hash,
         ).where(
@@ -100,6 +101,14 @@ def find_contact_by_name(
         )
         .order_by(tables.contacts.c.created_at, tables.contacts.c.id)
         .limit(1)
+    ).scalar_one_or_none()
+
+
+def get_display_no(session: Session, enquiry_id: uuid.UUID) -> int | None:
+    return session.execute(
+        select(tables.enquiries.c.display_no).where(
+            tables.enquiries.c.id == enquiry_id
+        )
     ).scalar_one_or_none()
 
 

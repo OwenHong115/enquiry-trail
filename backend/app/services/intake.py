@@ -32,6 +32,10 @@ class IntakeResult:
     """Public outcome of one intake submission."""
 
     enquiry_id: uuid.UUID
+    receipt_id: uuid.UUID | None = None
+    deduplication: str = "new"
+    replayed: bool = False
+    display_no: int | None = None
 
 
 class IdempotencyConflict(Exception):
@@ -167,7 +171,15 @@ def submit_intake(
                     f"event_key {event_key} was used with a different payload"
                 )
             # Replay: return the original enquiry, write nothing.
-            return IntakeResult(enquiry_id=existing.enquiry_id)
+            return IntakeResult(
+                enquiry_id=existing.enquiry_id,
+                receipt_id=existing.id,
+                deduplication="new",
+                replayed=True,
+                display_no=intake_repo.get_display_no(
+                    session, existing.enquiry_id
+                ),
+            )
 
         anchor = intake_repo.get_canonical_anchor(
             session, source, content_fingerprint
@@ -191,7 +203,15 @@ def submit_intake(
                 receipt_id=duplicate_id,
                 canonical_enquiry_id=anchor.enquiry_id,
             )
-            return IntakeResult(enquiry_id=anchor.enquiry_id)
+            return IntakeResult(
+                enquiry_id=anchor.enquiry_id,
+                receipt_id=duplicate_id,
+                deduplication="content_duplicate",
+                replayed=False,
+                display_no=intake_repo.get_display_no(
+                    session, anchor.enquiry_id
+                ),
+            )
 
         decision = evaluate_routing(
             payload.get("postcode"), payload["service_type"], routing_config
@@ -257,7 +277,7 @@ def submit_intake(
             ),
             received_at=received_at,
         )
-        intake_repo.insert_receipt(
+        receipt_id = intake_repo.insert_receipt(
             session,
             source=source,
             event_key=event_key,
@@ -286,4 +306,11 @@ def submit_intake(
             owner_id=owner_id,
             due_at=received_at + timedelta(minutes=FOLLOWUP_DUE_MINUTES),
         )
-    return IntakeResult(enquiry_id=enquiry_id)
+        display_no = intake_repo.get_display_no(session, enquiry_id)
+    return IntakeResult(
+        enquiry_id=enquiry_id,
+        receipt_id=receipt_id,
+        deduplication="new",
+        replayed=False,
+        display_no=display_no,
+    )

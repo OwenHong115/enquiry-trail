@@ -10,7 +10,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import auth, health, intake
 from app.api.errors import ApiError, envelope_response, error_response
+from app.config.routing import EXPECTED_ROUTING_SHA256, ROUTING_CONFIG
 from app.db.session import make_engine, make_session_factory
+from app.domain.routing import routing_config_hash
+from app.services.clock import SystemBusinessClock
 from app.settings import Settings
 
 _HTTP_CODE_MAP = {
@@ -27,8 +30,14 @@ _HTTP_CODE_MAP = {
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    if routing_config_hash(ROUTING_CONFIG) != EXPECTED_ROUTING_SHA256:
+        raise RuntimeError(
+            "routing config transcription does not match the authority hash"
+        )
     app = FastAPI(title="EnquiryTrail Demo")
     app.state.settings = settings
+    app.state.routing_config = ROUTING_CONFIG
+    app.state.clock = SystemBusinessClock()
     engine = make_engine(settings.database_url)
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
