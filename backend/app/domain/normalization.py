@@ -1,6 +1,9 @@
-"""Email and phone normalization (S1 stub; behaviour arrives in Green)."""
+"""Email and phone normalization."""
 
 from __future__ import annotations
+
+import phonenumbers
+from phonenumbers import PhoneNumberFormat
 
 
 def normalize_email(raw: str) -> str:
@@ -18,4 +21,12 @@ def normalize_phone(raw: str | None) -> str | None:
     Contract: phonenumbers AU default -> E.164; invalid nonempty rejected
     (raises ``ValueError`` at the domain layer).
     """
-    raise NotImplementedError
+    if raw is None:
+        return None
+    try:
+        number = phonenumbers.parse(raw, "AU")
+    except phonenumbers.NumberParseException as exc:
+        raise ValueError(f"invalid AU phone number: {raw!r}") from exc
+    if not phonenumbers.is_valid_number(number):
+        raise ValueError(f"invalid AU phone number: {raw!r}")
+    return phonenumbers.format_number(number, PhoneNumberFormat.E164)
