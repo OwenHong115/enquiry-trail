@@ -117,6 +117,19 @@ jobs = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
+crm_links = Table(
+    "crm_links",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("contact_id", Uuid, nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("remote_id", String(128)),
+    Column("sync_status", Text, nullable=False),
+    Column("synced_contact_version", Integer, nullable=False),
+    Column("last_synced_at", DateTime(timezone=True)),
+    Column("version", Integer, nullable=False),
+)
+
 job_attempts = Table(
     "job_attempts",
     metadata,

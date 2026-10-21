@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import insert, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db import tables
@@ -134,9 +135,32 @@ def stamp_local_prepared(
         )
         .values(local_prepared_at=prepared_at)
         .returning(
-            tables.enquiries.c.owner_id, tables.enquiries.c.routing_reason
+            tables.enquiries.c.owner_id,
+            tables.enquiries.c.routing_reason,
+            tables.enquiries.c.contact_id,
         )
     ).one_or_none()
+
+
+def insert_sync_job(
+    session: Session,
+    *,
+    enquiry_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    next_attempt_at: datetime,
+) -> None:
+    stmt = (
+        pg_insert(tables.jobs)
+        .values(
+            kind="sync_contact",
+            entity_id=enquiry_id,
+            dedupe_key=f"sync_contact:{contact_id}",
+            state="pending",
+            next_attempt_at=next_attempt_at,
+        )
+        .on_conflict_do_nothing(index_elements=["dedupe_key"])
+    )
+    session.execute(stmt)
 
 
 def insert_prepared_event(

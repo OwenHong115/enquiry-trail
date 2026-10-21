@@ -27,6 +27,7 @@ class ClaimedJob:
     entity_id: uuid.UUID
     lease_token: uuid.UUID
     attempt_no: int
+    cycle_no: int = 1
 
 
 def claim_next(
@@ -69,6 +70,7 @@ def claim_next(
             entity_id=job.entity_id,
             lease_token=lease_token,
             attempt_no=stamped.attempt_count,
+            cycle_no=stamped.cycle_no,
         )
 
 
@@ -80,33 +82,43 @@ def handle_claim(
 ) -> None:
     """Execute one claimed job.
 
-    The fence comes first for the local prepare: a single conditional
+    The fence comes first for every kind: a single conditional
     update keyed on the lease token. Zero rows means the lease is
-    stale — write nothing, emit nothing, return quietly. CRM sync
-    jobs dispatch to the sync service instead.
+    stale — write nothing, emit nothing, return quietly. Any later
+    failure (including a CRM exception) rolls the fence update back
+    with everything else.
     """
     with session.begin():
-        if claim.kind == "sync_contact":
-            crm_sync.sync_contact(session, claim.entity_id, crm, clock)
-            return
         fenced = job_repo.fence_succeed_job(session, claim.job_id, claim.lease_token)
         if fenced == 0:
             return
-        if claim.kind != "prepare_enquiry":
+        if claim.kind == "sync_contact":
+            if crm is None:
+                raise ValueError("sync_contact requires a CRM port")
+            crm_sync.sync_contact(session, claim, crm, clock)
+        elif claim.kind == "prepare_enquiry":
+            prepared_at = clock.now_utc()
+            prepared = job_repo.stamp_local_prepared(
+                session, claim.entity_id, prepared_at
+            )
+            if prepared is None:
+                return
+            job_repo.insert_prepared_event(
+                session,
+                enquiry_id=claim.entity_id,
+                owner_id=prepared.owner_id,
+                routing_reason=prepared.routing_reason,
+            )
+            job_repo.insert_sync_job(
+                session,
+                enquiry_id=claim.entity_id,
+                contact_id=prepared.contact_id,
+                next_attempt_at=prepared_at,
+            )
+        else:
             # Roll back the fence update rather than mark an
             # unhandled job succeeded.
             raise ValueError(f"unhandled job kind: {claim.kind!r}")
-        prepared = job_repo.stamp_local_prepared(
-            session, claim.entity_id, clock.now_utc()
-        )
-        if prepared is None:
-            return
-        job_repo.insert_prepared_event(
-            session,
-            enquiry_id=claim.entity_id,
-            owner_id=prepared.owner_id,
-            routing_reason=prepared.routing_reason,
-        )
         job_repo.close_attempt(
             session,
             job_id=claim.job_id,
