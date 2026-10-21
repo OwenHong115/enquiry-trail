@@ -59,6 +59,7 @@ enquiries = Table(
     Column("routing_reason", Text),
     Column("rules_version", String(80), nullable=False),
     Column("rules_hash", String(64), nullable=False),
+    Column("local_prepared_at", DateTime(timezone=True)),
     Column("requires_review", Boolean, nullable=False),
     Column("review_reason_codes", JSONB, nullable=False),
     Column("review_resolved_at", DateTime(timezone=True)),
@@ -105,7 +106,27 @@ jobs = Table(
     Column("entity_id", Uuid, nullable=False),
     Column("dedupe_key", String(256), nullable=False),
     Column("state", Text, nullable=False),
+    Column("attempt_count", Integer, nullable=False),
+    Column("cycle_no", Integer, nullable=False),
+    Column("cycle_attempt_count", Integer, nullable=False),
     Column("next_attempt_at", DateTime(timezone=True), nullable=False),
+    Column("lease_token", Uuid),
+    Column("lease_until", DateTime(timezone=True)),
+    Column("heartbeat_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+job_attempts = Table(
+    "job_attempts",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("job_id", Uuid, nullable=False),
+    Column("attempt_no", Integer, nullable=False),
+    Column("cycle_no", Integer, nullable=False),
+    Column("lease_token", Uuid, nullable=False),
+    Column("finished_at", DateTime(timezone=True)),
+    Column("outcome", String(80)),
 )
 
 activity_events = Table(
@@ -113,6 +134,7 @@ activity_events = Table(
     metadata,
     Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
     Column("enquiry_id", Uuid),
+    Column("job_id", Uuid),
     Column("event_type", Text, nullable=False),
     Column("severity", Text, nullable=False),
     Column("actor_type", Text, nullable=False),
