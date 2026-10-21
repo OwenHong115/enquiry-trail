@@ -68,11 +68,16 @@ def get_contact_by_email(
 def find_contact_by_phone(
     session: Session, phone_e164: str, exclude_id: uuid.UUID
 ) -> uuid.UUID | None:
+    # Several contacts may share a phone; the match is the earliest
+    # created one, deterministically.
     return session.execute(
-        select(tables.contacts.c.id).where(
+        select(tables.contacts.c.id)
+        .where(
             tables.contacts.c.phone_e164 == phone_e164,
             tables.contacts.c.id != exclude_id,
         )
+        .order_by(tables.contacts.c.created_at, tables.contacts.c.id)
+        .limit(1)
     ).scalar_one_or_none()
 
 
@@ -83,7 +88,8 @@ def find_contact_by_name(
     exclude_id: uuid.UUID,
 ) -> uuid.UUID | None:
     return session.execute(
-        select(tables.contacts.c.id).where(
+        select(tables.contacts.c.id)
+        .where(
             func.lower(func.btrim(tables.contacts.c.first_name))
             == first_name_folded,
             func.lower(
@@ -92,6 +98,8 @@ def find_contact_by_name(
             == last_name_folded,
             tables.contacts.c.id != exclude_id,
         )
+        .order_by(tables.contacts.c.created_at, tables.contacts.c.id)
+        .limit(1)
     ).scalar_one_or_none()
 
 

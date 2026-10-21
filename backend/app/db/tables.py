@@ -41,6 +41,7 @@ contacts = Table(
     Column("last_name", String(80)),
     Column("phone_e164", String(40)),
     Column("version", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 enquiries = Table(
