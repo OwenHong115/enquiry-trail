@@ -11,8 +11,10 @@ class FakeScheduler:
     """Scheduler test implementation; never sleeps, never random."""
 
     def compute_backoff(self, attempt_no: int, jitter: float = 0.0) -> float:
+        # The second argument is a jitter maximum in production; the
+        # fake ignores it and always returns the plain contract step.
         index = min(max(attempt_no, 1), len(_BACKOFF_SECONDS)) - 1
-        return _BACKOFF_SECONDS[index] + jitter
+        return _BACKOFF_SECONDS[index]
 
     def parse_retry_after(self, value: str | None, now: datetime) -> float:
         if value is None:
