@@ -170,6 +170,7 @@ def test_due_discipline_and_selection_order(postgres_db: str) -> None:
         "UPDATE leadops.jobs SET next_attempt_at = :when WHERE id = :job_id",
         {"when": T0 + timedelta(seconds=10), "job_id": second_job},
     )
+    clock.advance_to(T0 + timedelta(seconds=15))
     claim = _claim(postgres_db, WORKER_A, clock)
     assert claim is not None
     assert claim.job_id == second_job
