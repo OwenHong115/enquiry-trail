@@ -59,6 +59,39 @@ class ProbeResult:
     supports_patch: bool
 
 
+_PROVIDER_ERROR_CODES = frozenset(
+    {
+        "connect_failed",
+        "rate_limited",
+        "unavailable",
+        "auth_failed",
+        "validation_failed",
+        "not_found",
+        "conflict",
+        "result_unknown",
+        "invalid_response",
+        "director_unavailable",
+    }
+)
+
+
+class ProviderError(Exception):
+    """A classified provider failure (vocabulary ProviderError codes)."""
+
+    def __init__(
+        self,
+        code: str,
+        http_status: int | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        if code not in _PROVIDER_ERROR_CODES:
+            raise ValueError(f"unknown provider error code: {code!r}")
+        super().__init__(code)
+        self.code = code
+        self.http_status = http_status
+        self.retry_after_seconds = retry_after_seconds
+
+
 class CrmPort(Protocol):
     """The swappable CRM interface the sync service depends on."""
 

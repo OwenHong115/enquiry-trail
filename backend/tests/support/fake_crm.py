@@ -36,6 +36,7 @@ class FakeCrm:
     patch_supported: bool = True
     probe_ok: bool = True
     error: BaseException | None = None
+    lookup_script: list = field(default_factory=list)
     calls: list[RecordedCall] = field(default_factory=list)
 
     def calls_of(self, method: str) -> list[RecordedCall]:
@@ -52,6 +53,11 @@ class FakeCrm:
             RecordedCall("get_contact_by_email", {"email": email_norm}, context)
         )
         self._maybe_raise()
+        if self.lookup_script:
+            item = self.lookup_script.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
         if isinstance(self.by_email, BaseException):
             raise self.by_email
         return self.by_email

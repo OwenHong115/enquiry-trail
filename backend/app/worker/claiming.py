@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db import job_repo
 from app.ports.clock import BusinessClock
 from app.ports.crm import CrmPort
+from app.ports.scheduler import Scheduler
 from app.services import crm_sync
 
 # behavior.yaml#worker.lease_seconds. Lease and heartbeat columns are
@@ -79,6 +80,7 @@ def handle_claim(
     claim: ClaimedJob,
     clock: BusinessClock,
     crm: CrmPort | None = None,
+    scheduler: Scheduler | None = None,
 ) -> None:
     """Execute one claimed job.
 
