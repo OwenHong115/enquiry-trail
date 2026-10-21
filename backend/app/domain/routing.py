@@ -1,4 +1,4 @@
-"""Routing evaluation and config hash (S1 stub; behaviour arrives in Green)."""
+"""Routing evaluation and config hash."""
 
 from __future__ import annotations
 
