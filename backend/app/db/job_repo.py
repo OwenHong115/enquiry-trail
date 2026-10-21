@@ -32,6 +32,10 @@ def select_claimable(session: Session, due_before: datetime) -> Any | None:
                 (tables.jobs.c.state == "running")
                 & (tables.jobs.c.lease_until < text("now()"))
             )
+            | (
+                (tables.jobs.c.state == "waiting_retry")
+                & (tables.jobs.c.next_attempt_at <= due_before)
+            )
         )
         .order_by(
             tables.jobs.c.next_attempt_at,
@@ -108,7 +112,7 @@ def insert_lease_recovered_event(
     ).scalar_one()
 
 
-def fence_succeed_job(
+def fence_claim(
     session: Session, job_id: uuid.UUID, lease_token: uuid.UUID
 ) -> int:
     result = session.execute(
@@ -118,10 +122,72 @@ def fence_succeed_job(
             tables.jobs.c.lease_token == lease_token,
             tables.jobs.c.state == "running",
         )
-        .values(state="succeeded", updated_at=text("clock_timestamp()"))
+        .values(updated_at=text("clock_timestamp()"))
         .returning(tables.jobs.c.id)
     )
     return len(result.fetchall())
+
+
+def mark_job_succeeded(session: Session, job_id: uuid.UUID) -> int:
+    result = session.execute(
+        update(tables.jobs)
+        .where(tables.jobs.c.id == job_id)
+        .values(
+            state="succeeded",
+            last_error_code=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+    return result.rowcount
+
+
+def schedule_job_retry(
+    session: Session,
+    job_id: uuid.UUID,
+    *,
+    next_attempt_at: datetime,
+    error_code: str,
+) -> int:
+    result = session.execute(
+        update(tables.jobs)
+        .where(tables.jobs.c.id == job_id)
+        .values(
+            state="waiting_retry",
+            next_attempt_at=next_attempt_at,
+            last_error_code=error_code,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+    return result.rowcount
+
+
+def insert_retry_scheduled_event(
+    session: Session,
+    *,
+    job_id: uuid.UUID,
+    enquiry_id: uuid.UUID,
+    next_attempt_at: datetime,
+    attempt_no: int,
+) -> uuid.UUID:
+    return session.execute(
+        insert(tables.activity_events)
+        .values(
+            enquiry_id=enquiry_id,
+            job_id=job_id,
+            event_type="job.retry_scheduled",
+            severity="warning",
+            actor_type="worker",
+            details_json={
+                "job_id": str(job_id),
+                "next_attempt_at": next_attempt_at.isoformat(),
+                "attempt_no": attempt_no,
+            },
+        )
+        .returning(tables.activity_events.c.id)
+    ).scalar_one()
 
 
 def stamp_local_prepared(
@@ -187,7 +253,12 @@ def insert_prepared_event(
 
 
 def close_attempt(
-    session: Session, *, job_id: uuid.UUID, attempt_no: int, outcome: str
+    session: Session,
+    *,
+    job_id: uuid.UUID,
+    attempt_no: int,
+    outcome: str,
+    error_code: str | None = None,
 ) -> int:
     result = session.execute(
         update(tables.job_attempts)
@@ -195,6 +266,10 @@ def close_attempt(
             tables.job_attempts.c.job_id == job_id,
             tables.job_attempts.c.attempt_no == attempt_no,
         )
-        .values(finished_at=text("clock_timestamp()"), outcome=outcome)
+        .values(
+            finished_at=text("clock_timestamp()"),
+            outcome=outcome,
+            error_code=error_code,
+        )
     )
     return result.rowcount

@@ -7,11 +7,19 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from datetime import timedelta
+
 from app.db import job_repo
 from app.ports.clock import BusinessClock
-from app.ports.crm import CrmPort
+from app.ports.crm import CrmPort, ProviderError
 from app.ports.scheduler import Scheduler
 from app.services import crm_sync
+from app.services.scheduler import BackoffScheduler
+
+# The retryable-before-write set for this slice, and the worker
+# contract's jitter maximum (behavior.yaml worker.jitter_max_seconds).
+RETRYABLE_CODES = frozenset({"connect_failed", "unavailable", "rate_limited"})
+JITTER_MAX_SECONDS = 0.5
 
 # behavior.yaml#worker.lease_seconds. Lease and heartbeat columns are
 # OperationalClock-owned, so this duration is applied to the database
@@ -84,20 +92,56 @@ def handle_claim(
 ) -> None:
     """Execute one claimed job.
 
-    The fence comes first for every kind: a single conditional
-    update keyed on the lease token. Zero rows means the lease is
-    stale — write nothing, emit nothing, return quietly. Any later
-    failure (including a CRM exception) rolls the fence update back
-    with everything else.
+    The fence comes first for every kind: a conditional update keyed
+    on the lease token that only touches updated_at. Zero rows means
+    the lease is stale — return quietly, write nothing. Success is
+    marked only after the work completes; a retryable CRM failure
+    moves a sync job to waiting_retry instead. Any other failure
+    rolls the whole claim back.
     """
     with session.begin():
-        fenced = job_repo.fence_succeed_job(session, claim.job_id, claim.lease_token)
+        fenced = job_repo.fence_claim(session, claim.job_id, claim.lease_token)
         if fenced == 0:
             return
         if claim.kind == "sync_contact":
             if crm is None:
                 raise ValueError("sync_contact requires a CRM port")
-            crm_sync.sync_contact(session, claim, crm, clock)
+            effective_scheduler = scheduler or BackoffScheduler()
+            try:
+                crm_sync.sync_contact(session, claim, crm, clock)
+            except ProviderError as err:
+                if err.code not in RETRYABLE_CODES:
+                    raise
+                if err.retry_after_seconds is not None:
+                    delay = effective_scheduler.parse_retry_after(
+                        str(err.retry_after_seconds), clock.now_utc()
+                    )
+                else:
+                    delay = effective_scheduler.compute_backoff(
+                        claim.attempt_no, JITTER_MAX_SECONDS
+                    )
+                next_attempt_at = clock.now_utc() + timedelta(seconds=delay)
+                job_repo.close_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    attempt_no=claim.attempt_no,
+                    outcome="failed",
+                    error_code=err.code,
+                )
+                job_repo.schedule_job_retry(
+                    session,
+                    claim.job_id,
+                    next_attempt_at=next_attempt_at,
+                    error_code=err.code,
+                )
+                job_repo.insert_retry_scheduled_event(
+                    session,
+                    job_id=claim.job_id,
+                    enquiry_id=claim.entity_id,
+                    next_attempt_at=next_attempt_at,
+                    attempt_no=claim.attempt_no,
+                )
+                return
         elif claim.kind == "prepare_enquiry":
             prepared_at = clock.now_utc()
             prepared = job_repo.stamp_local_prepared(
@@ -121,6 +165,7 @@ def handle_claim(
             # Roll back the fence update rather than mark an
             # unhandled job succeeded.
             raise ValueError(f"unhandled job kind: {claim.kind!r}")
+        job_repo.mark_job_succeeded(session, claim.job_id)
         job_repo.close_attempt(
             session,
             job_id=claim.job_id,

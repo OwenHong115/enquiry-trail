@@ -112,6 +112,7 @@ jobs = Table(
     Column("next_attempt_at", DateTime(timezone=True), nullable=False),
     Column("lease_token", Uuid),
     Column("lease_until", DateTime(timezone=True)),
+    Column("last_error_code", Text),
     Column("heartbeat_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -140,6 +141,7 @@ job_attempts = Table(
     Column("lease_token", Uuid, nullable=False),
     Column("finished_at", DateTime(timezone=True)),
     Column("outcome", String(80)),
+    Column("error_code", Text),
 )
 
 activity_events = Table(
