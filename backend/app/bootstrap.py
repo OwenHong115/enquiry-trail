@@ -34,7 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         raise RuntimeError(
             "routing config transcription does not match the authority hash"
         )
-    app = FastAPI(title="EnquiryTrail Demo")
+    app = FastAPI(title="EnquiryTrail")
     app.state.settings = settings
     app.state.routing_config = ROUTING_CONFIG
     app.state.clock = SystemBusinessClock()
