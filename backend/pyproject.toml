@@ -22,3 +22,7 @@ packages = ["app"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests/unit"]
+# The sandbox locks backend/.pytest_cache to the invoking session, so cache
+# writes fail with WinError 5. The cache gains nothing here (the suite runs in
+# under a second), so the plugin is disabled rather than warning on every run.
+addopts = "-p no:cacheprovider"
