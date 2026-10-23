@@ -62,11 +62,12 @@ def test_deactivated_operators_live_session_is_rejected(
 
         # A write with a valid CSRF token must also get 401, not
         # 403: the session is resolved (and rejected) before CSRF
-        # is ever checked. A random enquiry id is enough — auth
-        # runs before any business lookup.
+        # is ever checked. The payload is deliberately valid so the
+        # request reaches require_operator; a 401 (not 403, not 422)
+        # proves session resolution precedes the CSRF check.
         write = api_client.post(
             f"/api/v1/enquiries/{uuid.uuid4()}/review/resolve",
-            json={"expected_version": 1, "resolution_note": "Confirmed"},
+            json={"expected_version": 1, "resolution_note": "Confirmed scope"},
             headers={CSRF_HEADER: api_client.csrf_token},  # type: ignore[attr-defined]
         )
         assert write.status_code == 401, write.text
