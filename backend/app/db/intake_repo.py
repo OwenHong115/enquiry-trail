@@ -2,17 +2,46 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, insert, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db import tables
 
 
 def take_content_lock(session: Session, lock_key: int) -> None:
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
+    )
+
+
+def _namespaced_lock_key(namespace: bytes, value: bytes) -> int:
+    """Signed first 64 bits of SHA256(namespace + value), big-endian."""
+    digest = hashlib.sha256(namespace + value).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def take_event_key_lock(
+    session: Session, source: str, event_key: uuid.UUID
+) -> None:
+    lock_key = _namespaced_lock_key(
+        b"event_key\x00",
+        source.encode("utf-8") + b"\x00" + str(event_key).encode("utf-8"),
+    )
+    session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
+    )
+
+
+def take_email_lock(session: Session, email_norm: str) -> None:
+    lock_key = _namespaced_lock_key(
+        b"email\x00", email_norm.encode("utf-8")
+    )
     session.execute(
         text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
     )
@@ -125,18 +154,32 @@ def insert_contact(
     first_name: str,
     last_name: str | None,
     phone_e164: str | None,
-) -> tuple[uuid.UUID, int]:
-    row = session.execute(
-        insert(tables.contacts)
+) -> tuple[uuid.UUID, int, bool]:
+    """Insert the contact atomically, or return the existing row.
+
+    A single INSERT ... ON CONFLICT (email_norm) DO NOTHING: when
+    it returns a row this call inserted the contact; when it
+    returns none, the email already exists and the row is read
+    back unchanged (its version is never bumped here).
+    """
+    stmt = (
+        pg_insert(tables.contacts)
         .values(
             email_norm=email_norm,
             first_name=first_name,
             last_name=last_name,
             phone_e164=phone_e164,
         )
+        .on_conflict_do_nothing(index_elements=["email_norm"])
         .returning(tables.contacts.c.id, tables.contacts.c.version)
-    ).one()
-    return row.id, row.version
+    )
+    row = session.execute(stmt).one_or_none()
+    if row is not None:
+        return row.id, row.version, True
+    existing = get_contact_by_email(session, email_norm)
+    if existing is None:  # pragma: no cover - conflict implies a row
+        raise RuntimeError(f"contact conflict without a row: {email_norm}")
+    return existing[0], existing[1], False
 
 
 def insert_enquiry(

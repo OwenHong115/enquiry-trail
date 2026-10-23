@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import intake_repo
@@ -40,6 +41,19 @@ class IntakeResult:
 
 class IdempotencyConflict(Exception):
     """The (source, event_key) was already used with a different payload."""
+
+
+class _ReceiptUniqueViolation(Exception):
+    """A receipt insert lost a race the advisory locks did not stop.
+
+    Carries the attempted payload hash so the public entry point
+    can, after this transaction has rolled back, re-read the
+    winning receipt and resolve to a replay or a conflict.
+    """
+
+    def __init__(self, payload_hash: str) -> None:
+        super().__init__("receipt insert hit a unique violation")
+        self.payload_hash = payload_hash
 
 _PAYLOAD_FIELDS = (
     "first_name",
@@ -115,7 +129,7 @@ def create_follow_up_task(
     )
 
 
-def submit_intake(
+def _submit_intake_once(
     session: Session,
     payload: dict[str, Any],
     *,
@@ -157,12 +171,19 @@ def submit_intake(
         )
         content_fingerprint = _canonical_hash(fingerprint_payload)
 
-        # Serialise identical content before any lookup or write:
-        # the advisory lock is held to commit, so a concurrent twin
-        # always observes the winner's receipt instead of racing it.
+        # Fixed lock order on every path: content -> event key ->
+        # email. Every intake acquires in this order only, so a
+        # transaction never waits on a lock class it has already
+        # passed and no wait cycle can form. Each lock is held to
+        # commit, so a concurrent twin always observes the winner's
+        # rows instead of racing them.
+        # 1. Serialise identical content before any lookup or write.
         intake_repo.take_content_lock(
             session, _content_lock_key(source, content_fingerprint)
         )
+        # 2. Serialise one (source, event_key) before the receipt
+        # lookup, so same-key races resolve as replay/conflict.
+        intake_repo.take_event_key_lock(session, source, event_key)
 
         existing = intake_repo.get_receipt_by_key(session, source, event_key)
         if existing is not None:
@@ -187,16 +208,19 @@ def submit_intake(
         if anchor is not None and (received_at - anchor.received_at) < timedelta(
             seconds=CONTENT_WINDOW_SECONDS
         ):
-            duplicate_id = intake_repo.insert_duplicate_receipt(
-                session,
-                source=source,
-                event_key=event_key,
-                payload_hash=payload_hash,
-                content_fingerprint=content_fingerprint,
-                payload_json=canonical_payload,
-                enquiry_id=anchor.enquiry_id,
-                received_at=received_at,
-            )
+            try:
+                duplicate_id = intake_repo.insert_duplicate_receipt(
+                    session,
+                    source=source,
+                    event_key=event_key,
+                    payload_hash=payload_hash,
+                    content_fingerprint=content_fingerprint,
+                    payload_json=canonical_payload,
+                    enquiry_id=anchor.enquiry_id,
+                    received_at=received_at,
+                )
+            except IntegrityError as err:
+                raise _ReceiptUniqueViolation(payload_hash) from err
             intake_repo.insert_content_duplicate_event(
                 session,
                 enquiry_id=anchor.enquiry_id,
@@ -223,21 +247,21 @@ def submit_intake(
             # to paper over by creating the row here.
             raise ValueError(f"routing owner is not seeded: {decision.owner!r}")
 
-        existing_contact = intake_repo.get_contact_by_email(session, email)
-        if existing_contact is not None:
-            # Returning customer: reuse the row as-is; its fields are
-            # never modified by a later enquiry.
-            contact_id, contact_version = existing_contact
-            contact_inserted = False
-        else:
-            contact_id, contact_version = intake_repo.insert_contact(
+        # 3. Serialise one email before the contact write. The
+        # write itself is a single atomic INSERT ... ON CONFLICT
+        # DO NOTHING, so there is no read-then-insert window even
+        # for a writer that ignores the advisory lock; a returning
+        # customer's row (and version) comes back unchanged.
+        intake_repo.take_email_lock(session, email)
+        contact_id, contact_version, contact_inserted = (
+            intake_repo.insert_contact(
                 session,
                 email_norm=email,
                 first_name=canonical_payload["first_name"],
                 last_name=canonical_payload["last_name"],
                 phone_e164=phone,
             )
-            contact_inserted = True
+        )
 
         matched_contact_id: uuid.UUID | None = None
         match_reason: str | None = None
@@ -277,16 +301,19 @@ def submit_intake(
             ),
             received_at=received_at,
         )
-        receipt_id = intake_repo.insert_receipt(
-            session,
-            source=source,
-            event_key=event_key,
-            payload_hash=payload_hash,
-            content_fingerprint=content_fingerprint,
-            payload_json=canonical_payload,
-            enquiry_id=enquiry_id,
-            received_at=received_at,
-        )
+        try:
+            receipt_id = intake_repo.insert_receipt(
+                session,
+                source=source,
+                event_key=event_key,
+                payload_hash=payload_hash,
+                content_fingerprint=content_fingerprint,
+                payload_json=canonical_payload,
+                enquiry_id=enquiry_id,
+                received_at=received_at,
+            )
+        except IntegrityError as err:
+            raise _ReceiptUniqueViolation(payload_hash) from err
         intake_repo.insert_initial_job(
             session, enquiry_id=enquiry_id, next_attempt_at=received_at
         )
@@ -314,3 +341,53 @@ def submit_intake(
         replayed=False,
         display_no=display_no,
     )
+
+
+def submit_intake(
+    session: Session,
+    payload: dict[str, Any],
+    *,
+    source: str,
+    event_key: uuid.UUID,
+    clock: BusinessClock,
+    routing_config: dict[str, Any],
+) -> IntakeResult:
+    """Persist one intake, resolving a lost receipt race if needed.
+
+    Defence in depth: the advisory locks should make a receipt
+    unique violation unreachable, but if one still escapes the
+    single intake transaction (which rolls back atomically), the
+    winning receipt is re-read in a fresh transaction. A matching
+    payload hash is a replay of the winner's enquiry; anything
+    else is the domain conflict the API maps to 409. No
+    IntegrityError escapes this entry point from a receipt insert.
+    """
+    try:
+        return _submit_intake_once(
+            session,
+            payload,
+            source=source,
+            event_key=event_key,
+            clock=clock,
+            routing_config=routing_config,
+        )
+    except _ReceiptUniqueViolation as violation:
+        with session.begin():
+            existing = intake_repo.get_receipt_by_key(
+                session, source, event_key
+            )
+            if existing is None or (
+                existing.payload_hash != violation.payload_hash
+            ):
+                raise IdempotencyConflict(
+                    f"event_key {event_key} was used with a different payload"
+                )
+            return IntakeResult(
+                enquiry_id=existing.enquiry_id,
+                receipt_id=existing.id,
+                deduplication="new",
+                replayed=True,
+                display_no=intake_repo.get_display_no(
+                    session, existing.enquiry_id
+                ),
+            )
