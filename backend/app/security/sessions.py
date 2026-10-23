@@ -113,6 +113,7 @@ def resolve_session(
             tables.sessions.c.token_hash == _hash(token),
             tables.sessions.c.revoked_at.is_(None),
             tables.sessions.c.expires_at > text("clock_timestamp()"),
+            tables.operators.c.active.is_(True),
         )
     ).one_or_none()
     if row is None:
