@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import COOKIE_NAME
 from app.api.display import format_display_no
 from app.api.errors import ApiError
-from app.db import enquiry_repo
+from app.db import enquiry_repo, health_repo
 from app.db.session import get_session
 from app.security import sessions as session_service
 
@@ -124,15 +124,24 @@ def build_enquiry_detail(
         return None
 
     link = enquiry_repo.get_crm_link(session, detail.contact_id)
+    job = enquiry_repo.get_sync_job(session, enquiry_id)
+    health = health_repo.get_health(session, "hubspot")
     task_row = enquiry_repo.get_follow_up_task(session, enquiry_id)
+
+    job_state = job.state if job is not None else None
+    next_attempt_at = (
+        job.next_attempt_at
+        if job_state in ("pending", "waiting_retry", "reconciling")
+        else None
+    )
 
     if link is None:
         crm = CrmOut(
-            status="pending",
+            status=job_state if job_state is not None else "pending",
             remote_id=None,
             remote_url=None,
             synced_contact_version=0,
-            next_attempt_at=None,
+            next_attempt_at=next_attempt_at,
             last_error_code=None,
         )
     else:
@@ -141,7 +150,7 @@ def build_enquiry_detail(
             remote_id=link.remote_id,
             remote_url=None,
             synced_contact_version=link.synced_contact_version,
-            next_attempt_at=None,
+            next_attempt_at=next_attempt_at,
             last_error_code=link.last_error_code,
         )
 
@@ -151,6 +160,25 @@ def build_enquiry_detail(
         and link.sync_status == "synced"
         and link.synced_contact_version >= detail.required_contact_version
     )
+
+    if prepared_and_synced:
+        processing_summary = "ready"
+    elif job_state is not None:
+        processing_summary = job_state
+    else:
+        processing_summary = "processing"
+
+    health_blocked = health is not None and health.status == "blocked"
+    if health_blocked or job_state == "blocked":
+        attention = "blocked"
+    elif detail.requires_review:
+        attention = "review_required"
+    elif job_state == "reconciling":
+        attention = "reconciling"
+    elif job_state == "waiting_retry":
+        attention = "retry_scheduled"
+    else:
+        attention = "none"
 
     task = task_out_from_row(task_row) if task_row is not None else None
 
@@ -176,8 +204,8 @@ def build_enquiry_detail(
             if detail.owner_id is not None
             else None
         ),
-        processing_summary="ready" if prepared_and_synced else "processing",
-        attention="none",
+        processing_summary=processing_summary,
+        attention=attention,
         requires_review=detail.requires_review,
         crm=crm,
         received_at=detail.received_at,

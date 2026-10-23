@@ -64,6 +64,21 @@ def get_crm_link(session: Session, contact_id: uuid.UUID) -> Any | None:
     ).one_or_none()
 
 
+def get_sync_job(session: Session, enquiry_id: uuid.UUID) -> Any | None:
+    return session.execute(
+        select(
+            tables.jobs.c.state,
+            tables.jobs.c.next_attempt_at,
+        )
+        .where(
+            tables.jobs.c.entity_id == enquiry_id,
+            tables.jobs.c.kind == "sync_contact",
+        )
+        .order_by(tables.jobs.c.created_at, tables.jobs.c.id)
+        .limit(1)
+    ).one_or_none()
+
+
 def get_follow_up_task(session: Session, enquiry_id: uuid.UUID) -> Any | None:
     owner = tables.owners.alias("task_owner")
     return session.execute(
