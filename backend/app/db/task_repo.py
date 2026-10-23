@@ -87,6 +87,7 @@ def insert_task_event(
     task_id: uuid.UUID,
     event_type: str,
     reason: str,
+    operator_id: uuid.UUID,
 ) -> uuid.UUID:
     return session.execute(
         insert(tables.activity_events)
@@ -95,7 +96,7 @@ def insert_task_event(
             event_type=event_type,
             severity="info",
             actor_type="operator",
-            actor_id=None,
+            actor_id=operator_id,
             details_json={"task_id": str(task_id), "reason": reason},
         )
         .returning(tables.activity_events.c.id)

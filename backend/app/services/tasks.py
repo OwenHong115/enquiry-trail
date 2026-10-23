@@ -30,6 +30,7 @@ def _terminal_action(
     expected_version: int,
     reason: str,
     clock: BusinessClock,
+    operator_id: uuid.UUID,
     target_status: str,
     event_type: str,
 ) -> None:
@@ -71,6 +72,7 @@ def _terminal_action(
             task_id=task_id,
             event_type=event_type,
             reason=reason,
+            operator_id=operator_id,
         )
 
 
@@ -81,6 +83,7 @@ def complete_task(
     expected_version: int,
     reason: str,
     clock: BusinessClock,
+    operator_id: uuid.UUID,
 ) -> None:
     """Complete an open follow-up task."""
     _terminal_action(
@@ -89,6 +92,7 @@ def complete_task(
         expected_version=expected_version,
         reason=reason,
         clock=clock,
+        operator_id=operator_id,
         target_status="completed",
         event_type="task.completed",
     )
@@ -101,6 +105,7 @@ def cancel_task(
     expected_version: int,
     reason: str,
     clock: BusinessClock,
+    operator_id: uuid.UUID,
 ) -> None:
     """Cancel an open follow-up task."""
     _terminal_action(
@@ -109,6 +114,7 @@ def cancel_task(
         expected_version=expected_version,
         reason=reason,
         clock=clock,
+        operator_id=operator_id,
         target_status="cancelled",
         event_type="task.cancelled",
     )

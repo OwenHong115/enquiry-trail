@@ -42,7 +42,7 @@ def _run_action(
     session: Session,
     csrf_token: str | None,
 ) -> TaskOut:
-    require_operator(request, session, csrf_token)
+    resolved = require_operator(request, session, csrf_token)
     # Auth reads opened a read transaction; end it so the service
     # can own its single write transaction.
     session.rollback()
@@ -53,6 +53,7 @@ def _run_action(
             expected_version=payload.expected_version,
             reason=payload.reason,
             clock=request.app.state.clock,
+            operator_id=resolved.operator_id,
         )
     except TaskNotFound as err:
         raise ApiError(404, "not_found", "Task not found") from err

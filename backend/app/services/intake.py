@@ -195,7 +195,7 @@ def _submit_intake_once(
             return IntakeResult(
                 enquiry_id=existing.enquiry_id,
                 receipt_id=existing.id,
-                deduplication="new",
+                deduplication=existing.deduplication,
                 replayed=True,
                 display_no=intake_repo.get_display_no(
                     session, existing.enquiry_id
@@ -385,7 +385,7 @@ def submit_intake(
             return IntakeResult(
                 enquiry_id=existing.enquiry_id,
                 receipt_id=existing.id,
-                deduplication="new",
+                deduplication=existing.deduplication,
                 replayed=True,
                 display_no=intake_repo.get_display_no(
                     session, existing.enquiry_id

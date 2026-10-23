@@ -55,6 +55,7 @@ def get_receipt_by_key(
             tables.ingestion_receipts.c.id,
             tables.ingestion_receipts.c.enquiry_id,
             tables.ingestion_receipts.c.payload_hash,
+            tables.ingestion_receipts.c.deduplication,
         ).where(
             tables.ingestion_receipts.c.source == source,
             tables.ingestion_receipts.c.event_key == event_key,
