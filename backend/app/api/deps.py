@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
-
 from fastapi import Request
 from sqlalchemy.orm import Session
 
@@ -28,6 +26,6 @@ def require_operator(
     if resolved is None:
         raise ApiError(401, "unauthenticated", "Authentication required")
     expected_csrf = session_service.derive_csrf(cookie_token, secret)
-    if not csrf_token or not hmac.compare_digest(csrf_token, expected_csrf):
+    if not session_service.csrf_matches(csrf_token, expected_csrf):
         raise ApiError(403, "csrf_invalid", "CSRF token is missing or invalid")
     return resolved

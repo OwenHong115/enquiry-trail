@@ -12,6 +12,12 @@ class Settings:
     app_base_url: str = "http://127.0.0.1:8080"
     session_secret: str = ""
 
+    def __post_init__(self) -> None:
+        # Fail fast: an empty secret makes CSRF tokens computable
+        # by anyone, so the app must not boot without a real one.
+        if not self.session_secret.strip():
+            raise ValueError("SESSION_SECRET must not be empty")
+
     @classmethod
     def from_env(cls) -> "Settings":
         database_url = os.environ.get("DATABASE_URL")

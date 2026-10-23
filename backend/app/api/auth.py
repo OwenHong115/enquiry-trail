@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import uuid
 from datetime import datetime
 
@@ -17,6 +16,16 @@ from app.security import sessions as session_service
 from app.security.passwords import verify_password
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+# Precomputed PBKDF2 string for a non-credential dummy password.
+# Login verifies against this when no active operator row exists,
+# so an unknown username costs the same PBKDF2 work as a wrong
+# password and does not leak existence through timing. Nothing is
+# hashed at import time; this is a literal.
+_DUMMY_PASSWORD_HASH = (
+    "pbkdf2_sha256$210000$dAmCSxFPey2D971mOX5uwg==$"
+    "FKsjVonXarvaym4vr+QFZWY9PvVM59CLnBrn7/sBhiA="
+)
 
 COOKIE_NAME = "leadops_session"
 CSRF_HEADER = "X-CSRF-Token"
@@ -56,9 +65,12 @@ def login(
     session: Session = Depends(get_session),
 ):
     operator = session_service.get_active_operator(session, payload.username)
-    if operator is None or not verify_password(
-        payload.password, operator.password_hash
-    ):
+    # Always run one verification, against a dummy hash when the
+    # operator row is missing, so timing cannot enumerate users.
+    stored_hash = (
+        operator.password_hash if operator is not None else _DUMMY_PASSWORD_HASH
+    )
+    if operator is None or not verify_password(payload.password, stored_hash):
         # One message for both failures: no user enumeration.
         raise ApiError(401, "invalid_credentials", "Invalid username or password")
     issued = session_service.issue_session(
@@ -101,7 +113,7 @@ def logout(request: Request, session: Session = Depends(get_session)):
     token, _resolved = _require_session(request, session)
     supplied = request.headers.get(CSRF_HEADER) or ""
     expected = session_service.derive_csrf(token, _secret(request))
-    if not hmac.compare_digest(supplied, expected):
+    if not session_service.csrf_matches(supplied, expected):
         raise ApiError(403, "csrf_invalid", "CSRF token is missing or invalid")
     session_service.revoke_session(session, token)
     response = Response(status_code=204)
