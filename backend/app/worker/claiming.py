@@ -11,7 +11,7 @@ from datetime import timedelta
 
 from app.db import crm_repo, job_repo
 from app.ports.clock import BusinessClock
-from app.ports.crm import CrmPort, ProviderError
+from app.ports.crm import CrmPort, FoundContact, NotFound, ProviderError
 from app.ports.scheduler import Scheduler
 from app.services import crm_sync, health
 from app.services.scheduler import BackoffScheduler
@@ -48,7 +48,6 @@ class ClaimedJob:
     attempt_no: int
     cycle_no: int = 1
     cycle_attempt_count: int = 1
-    state_before_claim: str | None = None
 
 
 def claim_next(
@@ -93,7 +92,313 @@ def claim_next(
             attempt_no=stamped.attempt_count,
             cycle_no=stamped.cycle_no,
             cycle_attempt_count=stamped.cycle_attempt_count,
-            state_before_claim=job.state,
+        )
+
+
+def _record_provider_failure(
+    session: Session,
+    claim: ClaimedJob,
+    clock: BusinessClock,
+    scheduler: Scheduler,
+    err: ProviderError,
+    *,
+    operation_id: uuid.UUID | None,
+    mark_operation_failed: bool,
+) -> bool:
+    """Record a provider failure in its own committed block.
+
+    Returns False for a non-retryable, non-auth, non-unknown error,
+    which the caller re-raises; the committed intent (if any) stays.
+    """
+    if err.code == "auth_failed":
+        # Never retried: block the job and the provider.
+        with session.begin():
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="blocked",
+                error_code="auth_failed",
+            )
+            job_repo.move_job_to_blocked(
+                session, claim.job_id, error_code="auth_failed"
+            )
+            health.block_provider(session, enquiry_id=claim.entity_id)
+        return True
+    if mark_operation_failed and err.code == "result_unknown":
+        assert operation_id is not None
+        with session.begin():
+            crm_repo.set_operation_unknown(session, operation_id)
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="failed",
+                error_code="result_unknown",
+            )
+            job_repo.move_job_to_reconciling(
+                session,
+                claim.job_id,
+                next_attempt_at=clock.now_utc()
+                + timedelta(seconds=FIRST_READBACK_DELAY_SECONDS),
+                error_code="result_unknown",
+            )
+            crm_repo.insert_operation_unknown_event(
+                session,
+                job_id=claim.job_id,
+                enquiry_id=claim.entity_id,
+                operation_id=operation_id,
+            )
+        return True
+    if err.code not in RETRYABLE_CODES:
+        return False
+    if claim.cycle_attempt_count >= PER_CYCLE_MAX_ATTEMPTS:
+        # R1 budget exhausted for this cycle: die terminally instead
+        # of rescheduling, even when the provider sent a retry_after.
+        with session.begin():
+            if mark_operation_failed and operation_id is not None:
+                crm_repo.set_operation_failed(session, operation_id)
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="failed",
+                error_code=err.code,
+            )
+            job_repo.move_job_to_dead(session, claim.job_id, error_code=err.code)
+            job_repo.insert_job_failed_event(
+                session,
+                job_id=claim.job_id,
+                enquiry_id=claim.entity_id,
+                error_code=err.code,
+            )
+        return True
+    if err.retry_after_seconds is not None:
+        delay = scheduler.parse_retry_after(
+            str(err.retry_after_seconds), clock.now_utc()
+        )
+    else:
+        delay = scheduler.compute_backoff(
+            claim.cycle_attempt_count, JITTER_MAX_SECONDS
+        )
+    next_attempt_at = clock.now_utc() + timedelta(seconds=delay)
+    with session.begin():
+        if mark_operation_failed and operation_id is not None:
+            crm_repo.set_operation_failed(session, operation_id)
+        job_repo.close_attempt(
+            session,
+            job_id=claim.job_id,
+            attempt_no=claim.attempt_no,
+            outcome="failed",
+            error_code=err.code,
+        )
+        job_repo.schedule_job_retry(
+            session,
+            claim.job_id,
+            next_attempt_at=next_attempt_at,
+            error_code=err.code,
+        )
+        job_repo.insert_retry_scheduled_event(
+            session,
+            job_id=claim.job_id,
+            enquiry_id=claim.entity_id,
+            next_attempt_at=next_attempt_at,
+            attempt_no=claim.attempt_no,
+        )
+    return True
+
+
+def _handle_readback(
+    session: Session,
+    claim: ClaimedJob,
+    clock: BusinessClock,
+    crm: CrmPort,
+    contact: object,
+    operation_id: uuid.UUID,
+) -> None:
+    """Read back an unresolved operation; never dispatches a create."""
+    context = crm_sync.make_context(claim, operation_id)
+    try:
+        found = crm.get_contact_by_email(contact.email_norm, context)  # type: ignore[attr-defined]
+    except ProviderError as err:
+        if err.code != "auth_failed":
+            raise
+        # A 401 readback resolves nothing: block, leave unresolved.
+        with session.begin():
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="blocked",
+                error_code="auth_failed",
+            )
+            job_repo.move_job_to_blocked(
+                session, claim.job_id, error_code="auth_failed"
+            )
+            health.block_provider(session, enquiry_id=claim.entity_id)
+        return
+    if isinstance(found, NotFound):
+        with session.begin():
+            crm_repo.touch_operation_readback(session, operation_id)
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="readback_not_found",
+            )
+            job_repo.reschedule_reconciling_job(
+                session,
+                claim.job_id,
+                next_attempt_at=clock.now_utc()
+                + timedelta(seconds=READBACK_DELAY_SECONDS),
+            )
+        return
+    if not isinstance(found, FoundContact):  # pragma: no cover
+        raise ValueError(f"unexpected CRM lookup result: {found!r}")
+    with session.begin():
+        crm_sync.record_readback_found(
+            session, claim, contact, operation_id, found
+        )
+        job_repo.mark_job_succeeded(session, claim.job_id)
+        job_repo.close_attempt(
+            session,
+            job_id=claim.job_id,
+            attempt_no=claim.attempt_no,
+            outcome="succeeded",
+        )
+
+
+def _handle_sync_claim(
+    session: Session,
+    claim: ClaimedJob,
+    clock: BusinessClock,
+    crm: CrmPort,
+    scheduler: Scheduler,
+) -> None:
+    # Block 1 (commit): fence, blocked check, recovery decision and
+    # provider lookup. On NotFound the intent is inserted here, so
+    # this commit makes it durable before any create is dispatched.
+    lookup: crm_sync.SyncLookup | None = None
+    contact: object = None
+    unresolved_id: uuid.UUID | None = None
+    blocked = False
+    try:
+        with session.begin():
+            fenced = job_repo.fence_claim(
+                session, claim.job_id, claim.lease_token
+            )
+            if fenced == 0:
+                return
+            if health.is_blocked(session):
+                # Defence in depth: re-block without reaching the
+                # provider at all while the provider is blocked.
+                job_repo.close_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    attempt_no=claim.attempt_no,
+                    outcome="blocked",
+                    error_code="auth_failed",
+                )
+                job_repo.move_job_to_blocked(
+                    session, claim.job_id, error_code="auth_failed"
+                )
+                blocked = True
+            else:
+                unresolved = crm_repo.get_unresolved_operation_by_job(
+                    session, claim.job_id
+                )
+                if unresolved is not None:
+                    unresolved_id = unresolved.id
+                    contact = crm_sync.load_contact(session, claim)
+                else:
+                    lookup = crm_sync.begin_sync(session, claim, crm)
+    except ProviderError as err:
+        # The lookup itself failed: block 1 rolled back, no intent
+        # was written, and the failure is recorded in a fresh block.
+        if not _record_provider_failure(
+            session,
+            claim,
+            clock,
+            scheduler,
+            err,
+            operation_id=None,
+            mark_operation_failed=False,
+        ):
+            raise
+        return
+    if blocked:
+        return
+    if unresolved_id is not None:
+        # Recovery is decided by the unresolved operation itself,
+        # regardless of the state the job was claimed from.
+        _handle_readback(session, claim, clock, crm, contact, unresolved_id)
+        return
+    assert lookup is not None
+    if isinstance(lookup.found, FoundContact):
+        found = lookup.found
+        candidates = crm_sync.existing_patch_candidates(lookup.contact, found)
+        try:
+            crm_sync.perform_existing_patch(
+                crm, lookup.context, found, candidates
+            )
+        except ProviderError as err:
+            if not _record_provider_failure(
+                session,
+                claim,
+                clock,
+                scheduler,
+                err,
+                operation_id=None,
+                mark_operation_failed=False,
+            ):
+                raise
+            return
+        # Block 3 (commit): preserved fields, link and synced event.
+        with session.begin():
+            crm_sync.record_existing_sync(
+                session, claim, lookup.contact, found
+            )
+            job_repo.mark_job_succeeded(session, claim.job_id)
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="succeeded",
+            )
+        return
+    # Step 2 (no open transaction): dispatch the create. The intent
+    # committed in block 1 survives any failure here, including a
+    # BaseException simulating process death.
+    assert lookup.operation_id is not None
+    try:
+        created = crm_sync.create_remote_contact(
+            crm, lookup.contact, lookup.context
+        )
+    except ProviderError as err:
+        # Block 4 (commit): record the failure state in a fresh
+        # transaction the provider exception did not roll back.
+        if not _record_provider_failure(
+            session,
+            claim,
+            clock,
+            scheduler,
+            err,
+            operation_id=lookup.operation_id,
+            mark_operation_failed=True,
+        ):
+            raise
+        return
+    # Block 3 (commit): create outcome, link and synced event.
+    with session.begin():
+        crm_sync.record_create_success(
+            session, claim, lookup.contact, lookup.operation_id, created
+        )
+        job_repo.mark_job_succeeded(session, claim.job_id)
+        job_repo.close_attempt(
+            session,
+            job_id=claim.job_id,
+            attempt_no=claim.attempt_no,
+            outcome="succeeded",
         )
 
 
@@ -108,157 +413,23 @@ def handle_claim(
 
     The fence comes first for every kind: a conditional update keyed
     on the lease token that only touches updated_at. Zero rows means
-    the lease is stale — return quietly, write nothing. Success is
-    marked only after the work completes; a retryable CRM failure
-    moves a sync job to waiting_retry instead. Any other failure
-    rolls the whole claim back.
+    the lease is stale — return quietly, write nothing. A sync claim
+    runs in sequentially committed blocks (see _handle_sync_claim)
+    so the operation intent survives a crash after the remote
+    create; the prepare path keeps its single transaction.
     """
+    if claim.kind == "sync_contact":
+        if crm is None:
+            raise ValueError("sync_contact requires a CRM port")
+        _handle_sync_claim(
+            session, claim, clock, crm, scheduler or BackoffScheduler()
+        )
+        return
     with session.begin():
         fenced = job_repo.fence_claim(session, claim.job_id, claim.lease_token)
         if fenced == 0:
             return
-        if claim.kind == "sync_contact":
-            if crm is None:
-                raise ValueError("sync_contact requires a CRM port")
-            effective_scheduler = scheduler or BackoffScheduler()
-            if claim.state_before_claim == "reconciling":
-                reconciled = crm_sync.reconcile_unknown(
-                    session, claim, crm, clock
-                )
-                if not reconciled:
-                    job_repo.close_attempt(
-                        session,
-                        job_id=claim.job_id,
-                        attempt_no=claim.attempt_no,
-                        outcome="readback_not_found",
-                    )
-                    job_repo.reschedule_reconciling_job(
-                        session,
-                        claim.job_id,
-                        next_attempt_at=clock.now_utc()
-                        + timedelta(seconds=READBACK_DELAY_SECONDS),
-                    )
-                    return
-                # Reconciled: fall through to the success marking.
-                job_repo.mark_job_succeeded(session, claim.job_id)
-                job_repo.close_attempt(
-                    session,
-                    job_id=claim.job_id,
-                    attempt_no=claim.attempt_no,
-                    outcome="succeeded",
-                )
-                return
-            if health.is_blocked(session):
-                # Defence in depth: a job claimed before the block
-                # (or raced against it) is re-blocked without ever
-                # reaching the provider.
-                job_repo.close_attempt(
-                    session,
-                    job_id=claim.job_id,
-                    attempt_no=claim.attempt_no,
-                    outcome="blocked",
-                    error_code="auth_failed",
-                )
-                job_repo.move_job_to_blocked(
-                    session, claim.job_id, error_code="auth_failed"
-                )
-                return
-            try:
-                crm_sync.sync_contact(session, claim, crm, clock)
-            except crm_sync.WriteResultUnknown as unknown:
-                job_repo.close_attempt(
-                    session,
-                    job_id=claim.job_id,
-                    attempt_no=claim.attempt_no,
-                    outcome="failed",
-                    error_code="result_unknown",
-                )
-                job_repo.move_job_to_reconciling(
-                    session,
-                    claim.job_id,
-                    next_attempt_at=clock.now_utc()
-                    + timedelta(seconds=FIRST_READBACK_DELAY_SECONDS),
-                    error_code="result_unknown",
-                )
-                crm_repo.insert_operation_unknown_event(
-                    session,
-                    job_id=claim.job_id,
-                    enquiry_id=claim.entity_id,
-                    operation_id=unknown.operation_id,
-                )
-                return
-            except ProviderError as err:
-                if err.code == "auth_failed":
-                    # Never retried: block the job and the provider.
-                    job_repo.close_attempt(
-                        session,
-                        job_id=claim.job_id,
-                        attempt_no=claim.attempt_no,
-                        outcome="blocked",
-                        error_code="auth_failed",
-                    )
-                    job_repo.move_job_to_blocked(
-                        session, claim.job_id, error_code="auth_failed"
-                    )
-                    health.block_provider(
-                        session, enquiry_id=claim.entity_id
-                    )
-                    return
-                if err.code not in RETRYABLE_CODES:
-                    raise
-                if claim.cycle_attempt_count >= PER_CYCLE_MAX_ATTEMPTS:
-                    # Budget exhausted for this cycle: die terminally
-                    # instead of rescheduling, even when the provider
-                    # sent a retry_after. A fifth claim would violate
-                    # the cycle_attempt_count schema check.
-                    job_repo.close_attempt(
-                        session,
-                        job_id=claim.job_id,
-                        attempt_no=claim.attempt_no,
-                        outcome="failed",
-                        error_code=err.code,
-                    )
-                    job_repo.move_job_to_dead(
-                        session, claim.job_id, error_code=err.code
-                    )
-                    job_repo.insert_job_failed_event(
-                        session,
-                        job_id=claim.job_id,
-                        enquiry_id=claim.entity_id,
-                        error_code=err.code,
-                    )
-                    return
-                if err.retry_after_seconds is not None:
-                    delay = effective_scheduler.parse_retry_after(
-                        str(err.retry_after_seconds), clock.now_utc()
-                    )
-                else:
-                    delay = effective_scheduler.compute_backoff(
-                        claim.cycle_attempt_count, JITTER_MAX_SECONDS
-                    )
-                next_attempt_at = clock.now_utc() + timedelta(seconds=delay)
-                job_repo.close_attempt(
-                    session,
-                    job_id=claim.job_id,
-                    attempt_no=claim.attempt_no,
-                    outcome="failed",
-                    error_code=err.code,
-                )
-                job_repo.schedule_job_retry(
-                    session,
-                    claim.job_id,
-                    next_attempt_at=next_attempt_at,
-                    error_code=err.code,
-                )
-                job_repo.insert_retry_scheduled_event(
-                    session,
-                    job_id=claim.job_id,
-                    enquiry_id=claim.entity_id,
-                    next_attempt_at=next_attempt_at,
-                    attempt_no=claim.attempt_no,
-                )
-                return
-        elif claim.kind == "prepare_enquiry":
+        if claim.kind == "prepare_enquiry":
             prepared_at = clock.now_utc()
             prepared = job_repo.stamp_local_prepared(
                 session, claim.entity_id, prepared_at
