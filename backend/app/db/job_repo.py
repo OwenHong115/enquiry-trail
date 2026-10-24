@@ -359,6 +359,91 @@ def insert_job_failed_event(
     ).scalar_one()
 
 
+def get_job_row(session: Session, job_id: uuid.UUID) -> Any | None:
+    return session.execute(
+        select(
+            tables.jobs.c.id,
+            tables.jobs.c.kind,
+            tables.jobs.c.entity_id,
+            tables.jobs.c.state,
+            tables.jobs.c.updated_at,
+        ).where(tables.jobs.c.id == job_id)
+    ).one_or_none()
+
+
+def retry_job_transition(
+    session: Session,
+    job_id: uuid.UUID,
+    *,
+    expected_state: str,
+    expected_updated_at: datetime,
+    next_attempt_at: datetime,
+) -> Any | None:
+    """The whole operator-retry transition in one conditional update.
+
+    Matches only when the job is still in the expected state at
+    the expected updated_at, so a stale or repeated retry matches
+    zero rows and can never open a second cycle.
+    """
+    return session.execute(
+        update(tables.jobs)
+        .where(
+            tables.jobs.c.id == job_id,
+            tables.jobs.c.state == expected_state,
+            tables.jobs.c.updated_at == expected_updated_at,
+        )
+        .values(
+            state="pending",
+            cycle_no=tables.jobs.c.cycle_no + 1,
+            cycle_attempt_count=0,
+            next_attempt_at=next_attempt_at,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            updated_at=text("clock_timestamp()"),
+        )
+        .returning(
+            tables.jobs.c.id,
+            tables.jobs.c.kind,
+            tables.jobs.c.entity_id,
+            tables.jobs.c.state,
+            tables.jobs.c.cycle_no,
+            tables.jobs.c.attempt_count,
+            tables.jobs.c.cycle_attempt_count,
+            tables.jobs.c.next_attempt_at,
+            tables.jobs.c.updated_at,
+        )
+    ).one_or_none()
+
+
+def insert_manual_retry_event(
+    session: Session,
+    *,
+    job_id: uuid.UUID,
+    enquiry_id: uuid.UUID,
+    operator_id: uuid.UUID,
+    reason: str,
+    cycle_no: int,
+) -> uuid.UUID:
+    return session.execute(
+        insert(tables.activity_events)
+        .values(
+            enquiry_id=enquiry_id,
+            job_id=job_id,
+            event_type="job.manual_retry",
+            severity="info",
+            actor_type="operator",
+            actor_id=operator_id,
+            details_json={
+                "job_id": str(job_id),
+                "reason": reason,
+                "cycle_no": cycle_no,
+            },
+        )
+        .returning(tables.activity_events.c.id)
+    ).scalar_one()
+
+
 def stamp_local_prepared(
     session: Session, enquiry_id: uuid.UUID, prepared_at: datetime
 ) -> Any | None:

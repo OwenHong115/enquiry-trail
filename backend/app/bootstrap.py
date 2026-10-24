@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import auth, enquiries, health, intake, reviews, tasks
+from app.api import auth, enquiries, health, intake, jobs, reviews, tasks
 from app.api.errors import ApiError, envelope_response, error_response
 from app.config.routing import EXPECTED_ROUTING_SHA256, ROUTING_CONFIG
 from app.db.session import make_engine, make_session_factory
@@ -130,6 +130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(enquiries.router)
     app.include_router(reviews.router)
     app.include_router(tasks.router)
+    app.include_router(jobs.router)
 
     def build_openapi() -> dict:
         # Schema metadata only: declare the session-cookie scheme
@@ -153,6 +154,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for path, method in (
             ("/api/v1/enquiries/{enquiry_id}/review/resolve", "post"),
             ("/api/v1/enquiries/{enquiry_id}", "get"),
+            ("/api/v1/jobs/{id}/retry", "post"),
         ):
             operation = schema.get("paths", {}).get(path, {}).get(method)
             if operation is not None:
