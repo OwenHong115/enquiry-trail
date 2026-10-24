@@ -91,8 +91,23 @@ class FakeCrm:
             sent["phone"] = fields.phone
         self.calls.append(RecordedCall("create_contact", sent, context))
         self._maybe_raise()
+        # Additive: a second distinct contact cannot reuse the first
+        # contact's remote_id (the real provider never does, and
+        # ux_crm_remote forbids it). The first create for an email
+        # keeps create_remote_id, so existing call sites are unchanged;
+        # a repeat create for the same email keeps its original id.
+        prior = self.remote_by_email.get(fields.email)
+        if prior is not None:
+            remote_id = prior.remote_id
+        elif any(
+            contact.remote_id == self.create_remote_id
+            for contact in self.remote_by_email.values()
+        ):
+            remote_id = f"{self.create_remote_id}-{len(self.remote_by_email) + 1}"
+        else:
+            remote_id = self.create_remote_id
         committed = FoundContact(
-            remote_id=self.create_remote_id,
+            remote_id=remote_id,
             email=fields.email,
             firstname=fields.firstname,
             lastname=fields.lastname,
