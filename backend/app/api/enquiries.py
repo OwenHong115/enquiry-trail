@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
@@ -34,8 +36,32 @@ class ContactOut(BaseModel):
     version: int
 
 
+# The published status vocabulary (contract enums): internal
+# job states are never published verbatim.
+ProcessingSummary = Literal[
+    "processing", "waiting_retry", "blocked", "reconciling", "ready", "failed"
+]
+Attention = Literal[
+    "none",
+    "review_required",
+    "retry_scheduled",
+    "notification_uncertain",
+    "integration_blocked",
+    "intervention_required",
+]
+CrmStatus = Literal[
+    "pending",
+    "syncing",
+    "waiting_retry",
+    "reconciling",
+    "synced",
+    "blocked",
+    "failed",
+]
+
+
 class CrmOut(BaseModel):
-    status: str
+    status: CrmStatus
     remote_id: str | None
     remote_url: str | None
     synced_contact_version: int
@@ -69,8 +95,8 @@ class EnquiryDetailOut(BaseModel):
     service_type: str
     postcode: str | None
     owner: OwnerOut | None
-    processing_summary: str
-    attention: str
+    processing_summary: ProcessingSummary
+    attention: Attention
     requires_review: bool
     crm: CrmOut
     received_at: datetime
@@ -111,6 +137,91 @@ def task_out_from_row(task_row) -> TaskOut:
     )
 
 
+@dataclass(frozen=True)
+class DetailStatus:
+    """The four published status fields, as one mapped unit."""
+
+    processing_summary: ProcessingSummary
+    attention: Attention
+    crm_status: CrmStatus
+    next_attempt_at: datetime | None
+
+
+# Internal sync-job state -> (summary, attention, crm.status).
+# The "succeeded" row is handled separately below because its
+# summary depends on prepared-and-synced.
+_SYNC_STATE_MAP: dict[str | None, tuple[str, str, str]] = {
+    None: ("processing", "none", "pending"),
+    "pending": ("processing", "none", "pending"),
+    "running": ("processing", "none", "syncing"),
+    "waiting_retry": ("waiting_retry", "retry_scheduled", "waiting_retry"),
+    "reconciling": ("reconciling", "none", "reconciling"),
+    "blocked": ("blocked", "integration_blocked", "blocked"),
+    "dead": ("failed", "intervention_required", "failed"),
+}
+
+
+def map_detail_status(
+    *,
+    sync_state: str | None,
+    provider_blocked: bool,
+    prepare_dead: bool,
+    requires_review: bool,
+    prepared_and_synced: bool,
+    sync_next_attempt_at: datetime | None,
+) -> DetailStatus:
+    """Map internal state to the published detail statuses.
+
+    The single place this mapping exists: build_enquiry_detail
+    contains no state conditionals of its own. An unmapped sync
+    state raises, so a new internal state can never leak through
+    as a public status.
+    """
+    if sync_state == "succeeded":
+        summary, attention, crm_status = (
+            "ready" if prepared_and_synced else "processing",
+            "none",
+            "synced",
+        )
+    elif sync_state in _SYNC_STATE_MAP:
+        summary, attention, crm_status = _SYNC_STATE_MAP[sync_state]
+    else:
+        raise ValueError(f"unmapped sync job state: {sync_state!r}")
+
+    # next_attempt_at is published ONLY for waiting_retry.
+    next_attempt_at = (
+        sync_next_attempt_at if sync_state == "waiting_retry" else None
+    )
+
+    # A pending review overrides only a base attention of "none":
+    # it is never hidden by ready or processing, and never masks
+    # integration_blocked, intervention_required or
+    # retry_scheduled.
+    if requires_review and attention == "none":
+        attention = "review_required"
+
+    # A blocked provider forces integration_blocked, and the
+    # blocked summary when the job itself is blocked or absent.
+    if provider_blocked:
+        attention = "integration_blocked"
+        if sync_state in (None, "blocked"):
+            summary = "blocked"
+
+    # local_prepare_dead: this enquiry's own prepare job died, so
+    # the summary is failed and the attention is an intervention;
+    # crm fields still come from the sync row (or pending/null).
+    if prepare_dead:
+        summary = "failed"
+        attention = "intervention_required"
+
+    return DetailStatus(
+        processing_summary=summary,  # type: ignore[arg-type]
+        attention=attention,  # type: ignore[arg-type]
+        crm_status=crm_status,  # type: ignore[arg-type]
+        next_attempt_at=next_attempt_at,
+    )
+
+
 def build_enquiry_detail(
     session: Session, enquiry_id: uuid.UUID
 ) -> EnquiryDetailOut | None:
@@ -125,35 +236,9 @@ def build_enquiry_detail(
 
     link = enquiry_repo.get_crm_link(session, detail.contact_id)
     job = enquiry_repo.get_sync_job_for_contact(session, detail.contact_id)
+    prepare_job = enquiry_repo.get_prepare_job(session, enquiry_id)
     health = health_repo.get_health(session, "hubspot")
     task_row = enquiry_repo.get_follow_up_task(session, enquiry_id)
-
-    job_state = job.state if job is not None else None
-    next_attempt_at = (
-        job.next_attempt_at
-        if job_state in ("pending", "waiting_retry", "reconciling")
-        else None
-    )
-
-    if link is None:
-        crm = CrmOut(
-            status=job_state if job_state is not None else "pending",
-            remote_id=None,
-            remote_url=None,
-            synced_contact_version=0,
-            next_attempt_at=next_attempt_at,
-            # No link row: the sync job carries the diagnosis.
-            last_error_code=job.last_error_code if job is not None else None,
-        )
-    else:
-        crm = CrmOut(
-            status=link.sync_status,
-            remote_id=link.remote_id,
-            remote_url=None,
-            synced_contact_version=link.synced_contact_version,
-            next_attempt_at=next_attempt_at,
-            last_error_code=link.last_error_code,
-        )
 
     prepared_and_synced = (
         detail.local_prepared_at is not None
@@ -162,28 +247,38 @@ def build_enquiry_detail(
         and link.synced_contact_version >= detail.required_contact_version
     )
 
-    if prepared_and_synced:
-        processing_summary = "ready"
-    elif job_state is not None:
-        processing_summary = job_state
-    else:
-        processing_summary = "processing"
+    # Every published status comes from the one mapping; this
+    # builder only assembles rows and mapped values.
+    status = map_detail_status(
+        sync_state=job.state if job is not None else None,
+        provider_blocked=health is not None and health.status == "blocked",
+        prepare_dead=prepare_job is not None and prepare_job.state == "dead",
+        requires_review=detail.requires_review,
+        prepared_and_synced=prepared_and_synced,
+        sync_next_attempt_at=job.next_attempt_at if job is not None else None,
+    )
+    processing_summary = status.processing_summary
+    attention = status.attention
 
-    health_blocked = health is not None and health.status == "blocked"
-    if health_blocked or job_state == "blocked":
-        attention = "blocked"
-    elif job_state == "dead":
-        # A dead sync outranks a routine review: the contact
-        # never reached the CRM.
-        attention = "dead"
-    elif detail.requires_review:
-        attention = "review_required"
-    elif job_state == "reconciling":
-        attention = "reconciling"
-    elif job_state == "waiting_retry":
-        attention = "retry_scheduled"
+    if link is None:
+        crm = CrmOut(
+            status=status.crm_status,
+            remote_id=None,
+            remote_url=None,
+            synced_contact_version=0,
+            next_attempt_at=status.next_attempt_at,
+            # No link row: the sync job carries the diagnosis.
+            last_error_code=job.last_error_code if job is not None else None,
+        )
     else:
-        attention = "none"
+        crm = CrmOut(
+            status=status.crm_status,
+            remote_id=link.remote_id,
+            remote_url=None,
+            synced_contact_version=link.synced_contact_version,
+            next_attempt_at=status.next_attempt_at,
+            last_error_code=link.last_error_code,
+        )
 
     task = task_out_from_row(task_row) if task_row is not None else None
 

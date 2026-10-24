@@ -90,6 +90,24 @@ def get_sync_job_for_contact(
     ).one_or_none()
 
 
+def get_prepare_job(session: Session, enquiry_id: uuid.UUID) -> Any | None:
+    """Return THIS enquiry's own prepare_enquiry job, if any.
+
+    Unlike the sync job, a prepare job is per enquiry, so this
+    lookup is by entity_id: its state drives the contract's
+    local_prepare_dead rule in the detail builder.
+    """
+    return session.execute(
+        select(tables.jobs.c.state)
+        .where(
+            tables.jobs.c.entity_id == enquiry_id,
+            tables.jobs.c.kind == "prepare_enquiry",
+        )
+        .order_by(tables.jobs.c.created_at, tables.jobs.c.id)
+        .limit(1)
+    ).one_or_none()
+
+
 def get_follow_up_task(session: Session, enquiry_id: uuid.UUID) -> Any | None:
     owner = tables.owners.alias("task_owner")
     return session.execute(
