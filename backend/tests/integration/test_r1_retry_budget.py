@@ -185,7 +185,7 @@ def _drive_to_dead(postgres_db: str, clock: FakeClock, job_id: uuid.UUID) -> Non
     assert _claim(postgres_db, clock) is None
 
 
-def test_fourth_retryable_failure_in_cycle_is_dead(postgres_db: str) -> None:
+def test_claim_closes_fourth_retryable_failure_without_a_fifth_attempt(postgres_db: str) -> None:
     clock = FakeClock(T0)
     (job_id,) = _enqueue_sync_jobs(postgres_db, clock, 1)
     fake = _failing_fake(4)
