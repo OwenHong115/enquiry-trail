@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,6 +39,8 @@ class FakeCrm:
     error: BaseException | None = None
     lookup_script: list = field(default_factory=list)
     create_commit_then_error: BaseException | None = None
+    before_create: Callable[[], None] | None = None
+    create_error: BaseException | None = None
     remote_by_email: dict[str, FoundContact] = field(default_factory=dict)
     calls: list[RecordedCall] = field(default_factory=list)
 
@@ -84,6 +87,14 @@ class FakeCrm:
     def create_contact(
         self, fields: CreateContact, context: CallContext
     ) -> FoundContact:
+        # Hook first, before any error and before the remote write
+        # is recorded, so tests can interleave work mid-create.
+        if self.before_create is not None:
+            self.before_create()
+        # A plain create failure: no remote write is recorded,
+        # unlike create_commit_then_error, which commits then raises.
+        if self.create_error is not None:
+            raise self.create_error
         sent: dict[str, Any] = {"email": fields.email, "firstname": fields.firstname}
         if fields.lastname is not None:
             sent["lastname"] = fields.lastname
