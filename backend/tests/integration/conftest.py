@@ -222,7 +222,8 @@ def api_client(postgres_db: str, api_operator):
         session_secret="test-session-secret",
     )
     app = create_app(settings)
-    factory = sessionmaker(bind=create_engine(postgres_db))
+    factory_engine = create_engine(postgres_db)
+    factory = sessionmaker(bind=factory_engine)
 
     def override_session():
         session = factory()
@@ -242,7 +243,14 @@ def api_client(postgres_db: str, api_operator):
         )
         assert response.status_code == 200, response.text
         client.csrf_token = response.json()["csrf_token"]  # type: ignore[attr-defined]
-        yield client
+        try:
+            yield client
+        finally:
+            # Return every pooled connection this fixture opened
+            # (the app engine and the session factory's engine),
+            # so a completed run leaves no test connections held.
+            app.state.engine.dispose()
+            factory_engine.dispose()
 
 
 @pytest.fixture()
