@@ -13,8 +13,7 @@ before further feature work.
   cover shared contacts and dead local preparation.
 - Intake contact upsert and event-key serialization; active-operator session checks;
   consistent replay classification, resolution notes and task actor identity.
-- Required session secret, malformed CSRF handling, constant-work missing-user login
-  verification, and 600,000-iteration hashes for new passwords (legacy hashes verify).
+- Required session secret, malformed CSRF handling, dummy-hash verification for absent usernames, and 600,000-iteration hashes for new passwords (legacy hashes verify).
 - JSON logging configured by API and worker entrypoints, bounded pool/DB waits,
   explicit HTTP security/error metadata, test connection cleanup, PostgreSQL 16 CI.
 
