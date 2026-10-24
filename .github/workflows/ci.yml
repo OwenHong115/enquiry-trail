@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - fix/reliability
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: postgresql+psycopg://leadops:leadops@127.0.0.1:55432/leadops
+      # CI-only value: the app refuses to start without a secret.
+      # Never reuse this outside CI.
+      SESSION_SECRET: ci-only-session-secret
+
+    services:
+      db:
+        image: postgres:16
+        ports:
+          - 55432:5432
+        env:
+          POSTGRES_USER: leadops
+          POSTGRES_PASSWORD: leadops
+          POSTGRES_DB: leadops
+        options: >-
+          --health-cmd "pg_isready -U leadops -d leadops"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies from uv.lock
+        working-directory: backend
+        run: uv sync --locked --python 3.12
+
+      # The API never migrates on startup; CI mirrors that.
+      - name: Apply migrations
+        working-directory: backend
+        run: uv run alembic upgrade head
+
+      - name: Run unit tests
+        working-directory: backend
+        run: uv run pytest tests/unit -q
+
+      - name: Run integration tests
+        working-directory: backend
+        run: uv run pytest tests/integration -q
