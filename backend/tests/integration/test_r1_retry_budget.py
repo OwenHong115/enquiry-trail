@@ -181,6 +181,8 @@ def _drive_to_dead(postgres_db: str, clock: FakeClock, job_id: uuid.UUID) -> Non
     for offset in (0, 1, 5, 21):
         clock.advance_to(T0 + timedelta(seconds=offset))
         _fail_once(postgres_db, clock, job_id, fake)
+    assert _job(postgres_db, job_id).state == "waiting_retry"
+    assert _claim(postgres_db, clock) is None
 
 
 def test_fourth_retryable_failure_in_cycle_is_dead(postgres_db: str) -> None:
@@ -198,10 +200,12 @@ def test_fourth_retryable_failure_in_cycle_is_dead(postgres_db: str) -> None:
         assert job.state == "waiting_retry"
         assert job.next_attempt_at == T0 + timedelta(seconds=due)
 
-    # Attempt 4 exhausts per_cycle_max_attempts: the job dies in the
-    # same handling, it does not schedule another retry.
+    # Attempt 4 records its failure; only the next claim owns closure.
+    # The budget closure must not wait for the scheduled retry instant.
     clock.advance_to(T0 + timedelta(seconds=21))
     _fail_once(postgres_db, clock, job_id, fake)
+    assert _job(postgres_db, job_id).state == "waiting_retry"
+    assert _claim(postgres_db, clock) is None
 
     job = _job(postgres_db, job_id)
     assert job.state == "dead"
@@ -214,12 +218,12 @@ def test_fourth_retryable_failure_in_cycle_is_dead(postgres_db: str) -> None:
     assert attempts[-1].outcome is not None
 
     # Exactly one job.failed, carrying the job and the provider
-    # error code; no fourth retry was scheduled.
+    # error code. Four failures were scheduled, but only four attempts ran.
     failed = _events(postgres_db, "job.failed")
     assert len(failed) == 1
     assert failed[0].details_json["job_id"] == str(job_id)
     assert failed[0].details_json["error_code"] == "unavailable"
-    assert len(_events(postgres_db, "job.retry_scheduled")) == 3
+    assert len(_events(postgres_db, "job.retry_scheduled")) == 4
 
 
 def test_dead_job_is_not_claimed_and_does_not_wedge_queue(
@@ -293,3 +297,17 @@ def test_backoff_uses_cycle_attempt_count_not_lifetime(postgres_db: str) -> None
     assert job.cycle_no == before.cycle_no + 1
     assert job.cycle_attempt_count == 1
     assert job.attempt_count == 4
+
+
+def test_fourth_attempt_can_still_succeed(postgres_db: str) -> None:
+    clock = FakeClock(T0)
+    (job_id,) = _enqueue_sync_jobs(postgres_db, clock, 1)
+    failures = _failing_fake(3)
+    for at in (0, 1, 5):
+        clock.advance_to(T0 + timedelta(seconds=at))
+        _fail_once(postgres_db, clock, job_id, failures)
+    clock.advance_to(T0 + timedelta(seconds=21))
+    _fail_once(postgres_db, clock, job_id, FakeCrm())
+    assert _job(postgres_db, job_id).state == "succeeded"
+    assert len(_attempts(postgres_db, job_id)) == 4
+    assert _events(postgres_db, "job.failed") == []
