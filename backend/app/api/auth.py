@@ -67,10 +67,14 @@ def login(
     operator = session_service.get_active_operator(session, payload.username)
     # Always run one verification, against a dummy hash when the
     # operator row is missing, so timing cannot enumerate users.
+    # The verification is evaluated into a local BEFORE the None
+    # check: `operator is None or not verify_password(...)` would
+    # short-circuit and skip the PBKDF2 work for unknown users.
     stored_hash = (
         operator.password_hash if operator is not None else _DUMMY_PASSWORD_HASH
     )
-    if operator is None or not verify_password(payload.password, stored_hash):
+    password_ok = verify_password(payload.password, stored_hash)
+    if operator is None or not password_ok:
         # One message for both failures: no user enumeration.
         raise ApiError(401, "invalid_credentials", "Invalid username or password")
     issued = session_service.issue_session(

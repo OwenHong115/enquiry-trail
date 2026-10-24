@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import insert, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db import tables
@@ -34,6 +35,44 @@ def insert_health_blocked(
             updated_at=text("clock_timestamp()"),
         )
     )
+
+
+def try_insert_health_blocked(
+    session: Session, provider: str, incident_id: uuid.UUID
+) -> uuid.UUID | None:
+    """Insert a blocked row, or report the conflict without raising.
+
+    INSERT ... ON CONFLICT (provider) DO NOTHING: the statement
+    waits for any concurrent inserter to commit and then reports
+    no row, so exactly one contender ever inserts. Returns the
+    new incident id when this call inserted, else None.
+    """
+    stmt = (
+        pg_insert(tables.integration_health)
+        .values(
+            provider=provider,
+            status="blocked",
+            incident_id=incident_id,
+            last_error_code="auth_failed",
+            blocked_at=text("clock_timestamp()"),
+            updated_at=text("clock_timestamp()"),
+        )
+        .on_conflict_do_nothing(index_elements=["provider"])
+        .returning(tables.integration_health.c.incident_id)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def get_health_for_update(session: Session, provider: str) -> Any | None:
+    """Read the health row under FOR UPDATE (call after a conflict)."""
+    return session.execute(
+        select(
+            tables.integration_health.c.status,
+            tables.integration_health.c.incident_id,
+        )
+        .where(tables.integration_health.c.provider == provider)
+        .with_for_update()
+    ).one_or_none()
 
 
 def update_health_blocked(

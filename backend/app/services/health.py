@@ -27,15 +27,34 @@ def block_provider(
 
     Returns the live incident id. An already-blocked provider keeps
     its incident, its blocked_at and its single blocked event.
+
+    Atomic, not check-then-act: the conflict-safe insert runs
+    first, so concurrent callers cannot both open an incident.
+    Exactly the call that opens the incident emits the one
+    integration.blocked event; every contender returns the same
+    live incident id and none raises.
     """
-    row = health_repo.get_health(session, provider)
+    incident_id = uuid.uuid4()
+    inserted = health_repo.try_insert_health_blocked(
+        session, provider, incident_id
+    )
+    if inserted is not None:
+        health_repo.insert_blocked_event(
+            session,
+            enquiry_id=enquiry_id,
+            provider=provider,
+            incident_id=incident_id,
+        )
+        return incident_id
+    # A row already exists: read it under the row lock (taken
+    # only now, after the insert attempt, so the lock ordering
+    # cannot deadlock against a concurrent inserter).
+    row = health_repo.get_health_for_update(session, provider)
     if row is not None and row.status == "blocked":
         return row.incident_id
-    incident_id = uuid.uuid4()
-    if row is None:
-        health_repo.insert_health_blocked(session, provider, incident_id)
-    else:
-        health_repo.update_health_blocked(session, provider, incident_id)
+    # A recovered provider failing again: reopen with a fresh
+    # incident and its single new event.
+    health_repo.update_health_blocked(session, provider, incident_id)
     health_repo.insert_blocked_event(
         session,
         enquiry_id=enquiry_id,
