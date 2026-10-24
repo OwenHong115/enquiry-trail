@@ -199,6 +199,15 @@ def _record_provider_failure(
         with session.begin():
             if not _lease_still_held(session, claim):
                 return True
+            if mark_operation_failed and operation_id is not None:
+                # Create path only (the caller passed an operation
+                # to mark): a 401 is a definite pre-write rejection
+                # (http_401_before_write), so close the operation as
+                # failed rather than leaving it at intent - an
+                # unresolved operation would send the post-resume
+                # claim down the readback-only path forever. The
+                # lookup path passes no operation and is untouched.
+                crm_repo.set_operation_failed(session, operation_id)
             job_repo.close_attempt(
                 session,
                 job_id=claim.job_id,
