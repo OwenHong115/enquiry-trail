@@ -24,7 +24,8 @@ Policy pinned for green (create path, keyed by err.code):
 - result_unknown -> reconciling at +1s, one
   crm.operation_unknown, operation "unknown".
 - auth_failed -> blocked, provider blocked, one
-  integration.blocked, operation left unresolved ("intent").
+  integration.blocked, operation closed as "failed" (a definite
+  pre-write rejection; R15).
 - validation_failed, not_found, conflict, invalid_response,
   director_unavailable -> terminal: job "dead", exactly one
   job.failed, operation "failed", attempt closed.
@@ -251,7 +252,7 @@ CREATE_CASES = [
      {"job.retry_scheduled": 1}, "failed"),
     ("result_unknown", "reconciling", "result_unknown", "unknown",
      {"crm.operation_unknown": 1}, "failed"),
-    ("auth_failed", "blocked", "auth_failed", "intent",
+    ("auth_failed", "blocked", "auth_failed", "failed",
      {"integration.blocked": 1}, "blocked"),
     ("validation_failed", "dead", "validation_failed", "failed",
      {"job.failed": 1}, "failed"),
