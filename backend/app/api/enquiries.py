@@ -124,7 +124,7 @@ def build_enquiry_detail(
         return None
 
     link = enquiry_repo.get_crm_link(session, detail.contact_id)
-    job = enquiry_repo.get_sync_job(session, enquiry_id)
+    job = enquiry_repo.get_sync_job_for_contact(session, detail.contact_id)
     health = health_repo.get_health(session, "hubspot")
     task_row = enquiry_repo.get_follow_up_task(session, enquiry_id)
 
@@ -142,7 +142,8 @@ def build_enquiry_detail(
             remote_url=None,
             synced_contact_version=0,
             next_attempt_at=next_attempt_at,
-            last_error_code=None,
+            # No link row: the sync job carries the diagnosis.
+            last_error_code=job.last_error_code if job is not None else None,
         )
     else:
         crm = CrmOut(
@@ -171,6 +172,10 @@ def build_enquiry_detail(
     health_blocked = health is not None and health.status == "blocked"
     if health_blocked or job_state == "blocked":
         attention = "blocked"
+    elif job_state == "dead":
+        # A dead sync outranks a routine review: the contact
+        # never reached the CRM.
+        attention = "dead"
     elif detail.requires_review:
         attention = "review_required"
     elif job_state == "reconciling":

@@ -64,14 +64,25 @@ def get_crm_link(session: Session, contact_id: uuid.UUID) -> Any | None:
     ).one_or_none()
 
 
-def get_sync_job(session: Session, enquiry_id: uuid.UUID) -> Any | None:
+def get_sync_job_for_contact(
+    session: Session, contact_id: uuid.UUID
+) -> Any | None:
+    """Return the one sync job shared by a contact's enquiries.
+
+    A sync job is shared per contact, not per enquiry: its
+    canonical key is the jobs.dedupe_key "sync_contact:<contact_id>"
+    (see insert_sync_job in app/db/job_repo.py), whose uniqueness
+    guarantees at most one row here. Resolving through the enquiry
+    id would miss the shared job for every enquiry after the first.
+    """
     return session.execute(
         select(
             tables.jobs.c.state,
             tables.jobs.c.next_attempt_at,
+            tables.jobs.c.last_error_code,
         )
         .where(
-            tables.jobs.c.entity_id == enquiry_id,
+            tables.jobs.c.dedupe_key == f"sync_contact:{contact_id}",
             tables.jobs.c.kind == "sync_contact",
         )
         .order_by(tables.jobs.c.created_at, tables.jobs.c.id)
