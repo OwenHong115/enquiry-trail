@@ -6,13 +6,15 @@ import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import auth, enquiries, health, intake, reviews, tasks
+from app.api import auth, enquiries, health, intake, jobs, reviews, tasks
 from app.api.errors import ApiError, envelope_response, error_response
 from app.config.routing import EXPECTED_ROUTING_SHA256, ROUTING_CONFIG
 from app.db.session import make_engine, make_session_factory
 from app.domain.routing import routing_config_hash
+from app.logging import log_event
 from app.services.clock import SystemBusinessClock
 from app.settings import Settings
 
@@ -47,6 +49,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request.state.request_id = str(uuid.uuid4())
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
+        # Identifiers and outcome only: no headers, cookies or bodies.
+        log_event(
+            "http.request",
+            request_id=request.state.request_id,
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+        )
         return response
 
     @app.exception_handler(ApiError)
@@ -82,9 +92,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_handler(request: Request, exc: Exception):
-        return envelope_response(
+        # This handler sits on ServerErrorMiddleware, OUTSIDE the
+        # request-id middleware, so an escaping exception never
+        # reaches the middleware's post-call_next lines. The error
+        # path therefore owns correlation here: the same request id
+        # the middleware already put on request.state (never a
+        # second one), one http.request record, and one http.error
+        # record carrying the exception class name only - no
+        # message, args, traceback or payload. Handled errors
+        # return through the middleware instead and are emitted
+        # there, so no path emits twice.
+        request_id = getattr(request.state, "request_id", "") or str(
+            uuid.uuid4()
+        )
+        request.state.request_id = request_id
+        log_event(
+            "http.request",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            status=500,
+        )
+        log_event(
+            "http.error",
+            request_id=request_id,
+            error_code=type(exc).__name__,
+        )
+        response = envelope_response(
             request, 500, "internal_error", "Internal server error"
         )
+        response.headers["X-Request-ID"] = request_id
+        return response
 
     app.include_router(auth.router)
     app.include_router(health.router)
@@ -92,4 +130,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(enquiries.router)
     app.include_router(reviews.router)
     app.include_router(tasks.router)
+    app.include_router(jobs.router)
+
+    def build_openapi() -> dict:
+        # Schema metadata only: declare the session-cookie scheme
+        # the routes already enforce. Runtime auth and CSRF checks
+        # stay in the session dependencies, untouched.
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title, version=app.version, routes=app.routes
+        )
+        schema.setdefault("components", {})["securitySchemes"] = {
+            "sessionCookie": {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": auth.COOKIE_NAME,
+            }
+        }
+        # Per-operation security, declared here because this
+        # FastAPI build's route decorators take no security
+        # argument. Metadata only, on the pinned operations.
+        for path, method in (
+            ("/api/v1/enquiries/{enquiry_id}/review/resolve", "post"),
+            ("/api/v1/enquiries/{enquiry_id}", "get"),
+            ("/api/v1/jobs/{id}/retry", "post"),
+        ):
+            operation = schema.get("paths", {}).get(path, {}).get(method)
+            if operation is not None:
+                operation["security"] = [{"sessionCookie": []}]
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = build_openapi  # type: ignore[method-assign]
     return app

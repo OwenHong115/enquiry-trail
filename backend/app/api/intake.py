@@ -12,8 +12,6 @@ import re
 import uuid
 from typing import Literal
 
-import hmac
-
 from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
@@ -79,7 +77,7 @@ def intake_form(
 
     # 2. The CSRF token must match the one derived for this session.
     expected_csrf = session_service.derive_csrf(cookie_token, secret)
-    if not csrf_token or not hmac.compare_digest(csrf_token, expected_csrf):
+    if not session_service.csrf_matches(csrf_token, expected_csrf):
         raise ApiError(403, "csrf_invalid", "CSRF token is missing or invalid")
 
     # 3. Domain phone validation, once, before the service: only

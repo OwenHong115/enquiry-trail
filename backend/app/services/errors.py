@@ -19,3 +19,7 @@ class EnquiryNotFound(ValueError):
 
 class TaskNotFound(ValueError):
     """No follow-up task exists with the given id (see EnquiryNotFound)."""
+
+
+class JobNotFound(ValueError):
+    """No job exists with the given id (see EnquiryNotFound)."""

@@ -57,6 +57,20 @@ def derive_csrf(raw_token: str, secret: str) -> str:
     ).hexdigest()
 
 
+def csrf_matches(supplied: str | None, expected: str) -> bool:
+    """Constant-time CSRF comparison that never raises.
+
+    Encoding both sides to UTF-8 bytes first makes a non-ASCII
+    supplied value a plain mismatch instead of the TypeError
+    hmac.compare_digest raises on non-ASCII str operands.
+    """
+    if not supplied:
+        return False
+    return hmac.compare_digest(
+        supplied.encode("utf-8"), expected.encode("utf-8")
+    )
+
+
 def get_active_operator(session: Session, username: str) -> Any | None:
     return session.execute(
         select(
@@ -113,6 +127,7 @@ def resolve_session(
             tables.sessions.c.token_hash == _hash(token),
             tables.sessions.c.revoked_at.is_(None),
             tables.sessions.c.expires_at > text("clock_timestamp()"),
+            tables.operators.c.active.is_(True),
         )
     ).one_or_none()
     if row is None:

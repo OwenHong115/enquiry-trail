@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,6 +39,8 @@ class FakeCrm:
     error: BaseException | None = None
     lookup_script: list = field(default_factory=list)
     create_commit_then_error: BaseException | None = None
+    before_create: Callable[[], None] | None = None
+    create_error: BaseException | None = None
     remote_by_email: dict[str, FoundContact] = field(default_factory=dict)
     calls: list[RecordedCall] = field(default_factory=list)
 
@@ -84,6 +87,14 @@ class FakeCrm:
     def create_contact(
         self, fields: CreateContact, context: CallContext
     ) -> FoundContact:
+        # Hook first, before any error and before the remote write
+        # is recorded, so tests can interleave work mid-create.
+        if self.before_create is not None:
+            self.before_create()
+        # A plain create failure: no remote write is recorded,
+        # unlike create_commit_then_error, which commits then raises.
+        if self.create_error is not None:
+            raise self.create_error
         sent: dict[str, Any] = {"email": fields.email, "firstname": fields.firstname}
         if fields.lastname is not None:
             sent["lastname"] = fields.lastname
@@ -91,8 +102,23 @@ class FakeCrm:
             sent["phone"] = fields.phone
         self.calls.append(RecordedCall("create_contact", sent, context))
         self._maybe_raise()
+        # Additive: a second distinct contact cannot reuse the first
+        # contact's remote_id (the real provider never does, and
+        # ux_crm_remote forbids it). The first create for an email
+        # keeps create_remote_id, so existing call sites are unchanged;
+        # a repeat create for the same email keeps its original id.
+        prior = self.remote_by_email.get(fields.email)
+        if prior is not None:
+            remote_id = prior.remote_id
+        elif any(
+            contact.remote_id == self.create_remote_id
+            for contact in self.remote_by_email.values()
+        ):
+            remote_id = f"{self.create_remote_id}-{len(self.remote_by_email) + 1}"
+        else:
+            remote_id = self.create_remote_id
         committed = FoundContact(
-            remote_id=self.create_remote_id,
+            remote_id=remote_id,
             email=fields.email,
             firstname=fields.firstname,
             lastname=fields.lastname,

@@ -108,18 +108,29 @@ def set_operation_unknown(session: Session, operation_id: uuid.UUID) -> None:
     )
 
 
-def get_unknown_operation_by_job(
+def get_unresolved_operation_by_job(
     session: Session, job_id: uuid.UUID
 ) -> Any | None:
     return session.execute(
-        select(tables.external_operations.c.id)
+        select(
+            tables.external_operations.c.id,
+            tables.external_operations.c.status,
+        )
         .where(
             tables.external_operations.c.job_id == job_id,
-            tables.external_operations.c.status == "unknown",
+            tables.external_operations.c.status.in_(("intent", "unknown")),
         )
         .order_by(tables.external_operations.c.id)
         .limit(1)
     ).one_or_none()
+
+
+def set_operation_failed(session: Session, operation_id: uuid.UUID) -> None:
+    session.execute(
+        update(tables.external_operations)
+        .where(tables.external_operations.c.id == operation_id)
+        .values(status="failed", remote_id=None)
+    )
 
 
 def set_operation_reconciled(

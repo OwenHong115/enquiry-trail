@@ -189,7 +189,9 @@ def test_a08_review_resolution(postgres_db: str, seeded_operator: object) -> Non
     assert len(_events(postgres_db, "review.resolved")) == 1
 
 
-def test_a24_complete_is_terminal_and_repeatable(postgres_db: str) -> None:
+def test_a24_complete_is_terminal_and_repeatable(
+    postgres_db: str, seeded_operator: object
+) -> None:
     clock = FakeClock(CLOCK_START)
     result = _submit(postgres_db, _payload(), clock)
     task_id = _task_id(postgres_db, result.enquiry_id)
@@ -201,7 +203,7 @@ def test_a24_complete_is_terminal_and_repeatable(postgres_db: str) -> None:
     def call(fn, **kwargs: object) -> None:
         session = factory()
         try:
-            fn(session, task_id, clock=clock, **kwargs)
+            fn(session, task_id, operator_id=seeded_operator, clock=clock, **kwargs)  # type: ignore[arg-type]
         finally:
             session.close()
 
@@ -237,7 +239,9 @@ def test_a24_complete_is_terminal_and_repeatable(postgres_db: str) -> None:
     assert len(_events(postgres_db, "task.cancelled")) == 0
 
 
-def test_a24_cancel_is_terminal_and_repeatable(postgres_db: str) -> None:
+def test_a24_cancel_is_terminal_and_repeatable(
+    postgres_db: str, seeded_operator: object
+) -> None:
     clock = FakeClock(CLOCK_START)
     result = _submit(
         postgres_db,
@@ -253,7 +257,7 @@ def test_a24_cancel_is_terminal_and_repeatable(postgres_db: str) -> None:
     def call(fn, **kwargs: object) -> None:
         session = factory()
         try:
-            fn(session, task_id, clock=clock, **kwargs)
+            fn(session, task_id, operator_id=seeded_operator, clock=clock, **kwargs)  # type: ignore[arg-type]
         finally:
             session.close()
 

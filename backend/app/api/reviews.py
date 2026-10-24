@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_operator
 from app.api.enquiries import EnquiryDetailOut, build_enquiry_detail
-from app.api.errors import ApiError
+from app.api.errors import ApiError, ErrorEnvelope
 from app.db.session import get_session
 from app.services.errors import EnquiryNotFound, VersionConflict
 from app.services.review import resolve_review
@@ -32,7 +32,15 @@ class ReviewResolveIn(BaseModel):
 
 
 @router.post(
-    "/{enquiry_id}/review/resolve", response_model=EnquiryDetailOut
+    "/{enquiry_id}/review/resolve",
+    response_model=EnquiryDetailOut,
+    # Schema metadata only: enforcement stays in require_operator.
+    responses={
+        401: {"model": ErrorEnvelope},
+        403: {"model": ErrorEnvelope},
+        409: {"model": ErrorEnvelope},
+        422: {"model": ErrorEnvelope},
+    },
 )
 def resolve_review_route(
     enquiry_id: uuid.UUID,

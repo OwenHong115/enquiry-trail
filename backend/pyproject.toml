@@ -16,6 +16,9 @@ dependencies = [
     "sqlalchemy>=2",
 ]
 
+[project.scripts]
+leadops-worker = "app.worker.runner:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
