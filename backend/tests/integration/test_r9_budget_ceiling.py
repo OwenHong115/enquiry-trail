@@ -286,7 +286,12 @@ def test_readback_loop_exhausts_budget_without_wedging_queue(
             break
         clock.advance_to(job.next_attempt_at)
         claim = _claim(postgres_db, clock)
-        assert claim is not None
+        if claim is None:
+            # The claim-time closure closed the job at the ceiling
+            # and nothing else was due yet: that is exactly the
+            # termination this loop is driving towards.
+            assert _job_row(postgres_db, sync_job_id).state == "dead"
+            break
         assert claim.job_id == sync_job_id
         _handle(postgres_db, claim, clock, readback_fake)
 
