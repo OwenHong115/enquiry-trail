@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from datetime import timedelta
 
 from app.db import crm_repo, job_repo
+from app.logging import log_event
 from app.ports.clock import BusinessClock
 from app.ports.crm import CrmPort, FoundContact, NotFound, ProviderError
 from app.ports.scheduler import Scheduler
@@ -95,6 +96,24 @@ def claim_next(
         )
 
 
+def _lease_still_held(session: Session, claim: ClaimedJob) -> bool:
+    """Re-check the lease inside a finalization transaction.
+
+    Must be called inside ``with session.begin():`` before any
+    write. True means the fence update matched this claim's lease
+    and the block may proceed under the job row lock. False means
+    another worker now owns the job: the caller abandons the whole
+    block without writing (the empty transaction commits), closes
+    nothing, and does not raise. Only identifiers are logged.
+    """
+    if job_repo.fence_claim(session, claim.job_id, claim.lease_token) != 0:
+        return True
+    log_event(
+        "job.fence_lost", job_id=str(claim.job_id), attempt_no=claim.attempt_no
+    )
+    return False
+
+
 def _record_provider_failure(
     session: Session,
     claim: ClaimedJob,
@@ -109,10 +128,16 @@ def _record_provider_failure(
 
     Returns False for a non-retryable, non-auth, non-unknown error,
     which the caller re-raises; the committed intent (if any) stays.
+    Returns True when the failure was recorded, and also True when
+    the lease fence was lost: then nothing was written and the
+    caller must still not re-raise, because another worker owns
+    the job now and will record the outcome itself.
     """
     if err.code == "auth_failed":
         # Never retried: block the job and the provider.
         with session.begin():
+            if not _lease_still_held(session, claim):
+                return True
             job_repo.close_attempt(
                 session,
                 job_id=claim.job_id,
@@ -121,13 +146,18 @@ def _record_provider_failure(
                 error_code="auth_failed",
             )
             job_repo.move_job_to_blocked(
-                session, claim.job_id, error_code="auth_failed"
+                session,
+                claim.job_id,
+                error_code="auth_failed",
+                lease_token=claim.lease_token,
             )
             health.block_provider(session, enquiry_id=claim.entity_id)
         return True
     if mark_operation_failed and err.code == "result_unknown":
         assert operation_id is not None
         with session.begin():
+            if not _lease_still_held(session, claim):
+                return True
             crm_repo.set_operation_unknown(session, operation_id)
             job_repo.close_attempt(
                 session,
@@ -142,6 +172,7 @@ def _record_provider_failure(
                 next_attempt_at=clock.now_utc()
                 + timedelta(seconds=FIRST_READBACK_DELAY_SECONDS),
                 error_code="result_unknown",
+                lease_token=claim.lease_token,
             )
             crm_repo.insert_operation_unknown_event(
                 session,
@@ -156,6 +187,8 @@ def _record_provider_failure(
         # R1 budget exhausted for this cycle: die terminally instead
         # of rescheduling, even when the provider sent a retry_after.
         with session.begin():
+            if not _lease_still_held(session, claim):
+                return True
             if mark_operation_failed and operation_id is not None:
                 crm_repo.set_operation_failed(session, operation_id)
             job_repo.close_attempt(
@@ -165,7 +198,12 @@ def _record_provider_failure(
                 outcome="failed",
                 error_code=err.code,
             )
-            job_repo.move_job_to_dead(session, claim.job_id, error_code=err.code)
+            job_repo.move_job_to_dead(
+                session,
+                claim.job_id,
+                error_code=err.code,
+                lease_token=claim.lease_token,
+            )
             job_repo.insert_job_failed_event(
                 session,
                 job_id=claim.job_id,
@@ -183,6 +221,8 @@ def _record_provider_failure(
         )
     next_attempt_at = clock.now_utc() + timedelta(seconds=delay)
     with session.begin():
+        if not _lease_still_held(session, claim):
+            return True
         if mark_operation_failed and operation_id is not None:
             crm_repo.set_operation_failed(session, operation_id)
         job_repo.close_attempt(
@@ -197,6 +237,7 @@ def _record_provider_failure(
             claim.job_id,
             next_attempt_at=next_attempt_at,
             error_code=err.code,
+            lease_token=claim.lease_token,
         )
         job_repo.insert_retry_scheduled_event(
             session,
@@ -225,6 +266,8 @@ def _handle_readback(
             raise
         # A 401 readback resolves nothing: block, leave unresolved.
         with session.begin():
+            if not _lease_still_held(session, claim):
+                return
             job_repo.close_attempt(
                 session,
                 job_id=claim.job_id,
@@ -233,12 +276,17 @@ def _handle_readback(
                 error_code="auth_failed",
             )
             job_repo.move_job_to_blocked(
-                session, claim.job_id, error_code="auth_failed"
+                session,
+                claim.job_id,
+                error_code="auth_failed",
+                lease_token=claim.lease_token,
             )
             health.block_provider(session, enquiry_id=claim.entity_id)
         return
     if isinstance(found, NotFound):
         with session.begin():
+            if not _lease_still_held(session, claim):
+                return
             crm_repo.touch_operation_readback(session, operation_id)
             job_repo.close_attempt(
                 session,
@@ -251,15 +299,20 @@ def _handle_readback(
                 claim.job_id,
                 next_attempt_at=clock.now_utc()
                 + timedelta(seconds=READBACK_DELAY_SECONDS),
+                lease_token=claim.lease_token,
             )
         return
     if not isinstance(found, FoundContact):  # pragma: no cover
         raise ValueError(f"unexpected CRM lookup result: {found!r}")
     with session.begin():
+        if not _lease_still_held(session, claim):
+            return
         crm_sync.record_readback_found(
             session, claim, contact, operation_id, found
         )
-        job_repo.mark_job_succeeded(session, claim.job_id)
+        job_repo.mark_job_succeeded(
+            session, claim.job_id, lease_token=claim.lease_token
+        )
         job_repo.close_attempt(
             session,
             job_id=claim.job_id,
@@ -300,7 +353,10 @@ def _handle_sync_claim(
                     error_code="auth_failed",
                 )
                 job_repo.move_job_to_blocked(
-                    session, claim.job_id, error_code="auth_failed"
+                    session,
+                    claim.job_id,
+                    error_code="auth_failed",
+                    lease_token=claim.lease_token,
                 )
                 blocked = True
             else:
@@ -355,10 +411,14 @@ def _handle_sync_claim(
             return
         # Block 3 (commit): preserved fields, link and synced event.
         with session.begin():
+            if not _lease_still_held(session, claim):
+                return
             crm_sync.record_existing_sync(
                 session, claim, lookup.contact, found
             )
-            job_repo.mark_job_succeeded(session, claim.job_id)
+            job_repo.mark_job_succeeded(
+                session, claim.job_id, lease_token=claim.lease_token
+            )
             job_repo.close_attempt(
                 session,
                 job_id=claim.job_id,
@@ -390,10 +450,14 @@ def _handle_sync_claim(
         return
     # Block 3 (commit): create outcome, link and synced event.
     with session.begin():
+        if not _lease_still_held(session, claim):
+            return
         crm_sync.record_create_success(
             session, claim, lookup.contact, lookup.operation_id, created
         )
-        job_repo.mark_job_succeeded(session, claim.job_id)
+        job_repo.mark_job_succeeded(
+            session, claim.job_id, lease_token=claim.lease_token
+        )
         job_repo.close_attempt(
             session,
             job_id=claim.job_id,
@@ -452,7 +516,9 @@ def handle_claim(
             # Roll back the fence update rather than mark an
             # unhandled job succeeded.
             raise ValueError(f"unhandled job kind: {claim.kind!r}")
-        job_repo.mark_job_succeeded(session, claim.job_id)
+        job_repo.mark_job_succeeded(
+            session, claim.job_id, lease_token=claim.lease_token
+        )
         job_repo.close_attempt(
             session,
             job_id=claim.job_id,

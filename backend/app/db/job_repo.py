@@ -147,10 +147,25 @@ def fence_claim(
     return len(result.fetchall())
 
 
-def mark_job_succeeded(session: Session, job_id: uuid.UUID) -> int:
+def _job_where(job_id: uuid.UUID, lease_token: uuid.UUID | None):
+    """WHERE for a job update, optionally fenced on the lease.
+
+    A supplied lease_token adds AND lease_token = :token, so a
+    worker whose lease was stolen updates zero rows. The default
+    None keeps existing callers working unchanged.
+    """
+    conditions = [tables.jobs.c.id == job_id]
+    if lease_token is not None:
+        conditions.append(tables.jobs.c.lease_token == lease_token)
+    return conditions
+
+
+def mark_job_succeeded(
+    session: Session, job_id: uuid.UUID, *, lease_token: uuid.UUID | None = None
+) -> int:
     result = session.execute(
         update(tables.jobs)
-        .where(tables.jobs.c.id == job_id)
+        .where(*_job_where(job_id, lease_token))
         .values(
             state="succeeded",
             last_error_code=None,
@@ -166,10 +181,11 @@ def schedule_job_retry(
     *,
     next_attempt_at: datetime,
     error_code: str,
+    lease_token: uuid.UUID | None = None,
 ) -> int:
     result = session.execute(
         update(tables.jobs)
-        .where(tables.jobs.c.id == job_id)
+        .where(*_job_where(job_id, lease_token))
         .values(
             state="waiting_retry",
             next_attempt_at=next_attempt_at,
@@ -184,11 +200,15 @@ def schedule_job_retry(
 
 
 def move_job_to_blocked(
-    session: Session, job_id: uuid.UUID, *, error_code: str
+    session: Session,
+    job_id: uuid.UUID,
+    *,
+    error_code: str,
+    lease_token: uuid.UUID | None = None,
 ) -> int:
     result = session.execute(
         update(tables.jobs)
-        .where(tables.jobs.c.id == job_id)
+        .where(*_job_where(job_id, lease_token))
         .values(
             state="blocked",
             last_error_code=error_code,
@@ -202,11 +222,15 @@ def move_job_to_blocked(
 
 
 def move_job_to_dead(
-    session: Session, job_id: uuid.UUID, *, error_code: str
+    session: Session,
+    job_id: uuid.UUID,
+    *,
+    error_code: str,
+    lease_token: uuid.UUID | None = None,
 ) -> int:
     result = session.execute(
         update(tables.jobs)
-        .where(tables.jobs.c.id == job_id)
+        .where(*_job_where(job_id, lease_token))
         .values(
             state="dead",
             last_error_code=error_code,
@@ -225,10 +249,11 @@ def move_job_to_reconciling(
     *,
     next_attempt_at: datetime,
     error_code: str,
+    lease_token: uuid.UUID | None = None,
 ) -> int:
     result = session.execute(
         update(tables.jobs)
-        .where(tables.jobs.c.id == job_id)
+        .where(*_job_where(job_id, lease_token))
         .values(
             state="reconciling",
             next_attempt_at=next_attempt_at,
@@ -243,11 +268,15 @@ def move_job_to_reconciling(
 
 
 def reschedule_reconciling_job(
-    session: Session, job_id: uuid.UUID, *, next_attempt_at: datetime
+    session: Session,
+    job_id: uuid.UUID,
+    *,
+    next_attempt_at: datetime,
+    lease_token: uuid.UUID | None = None,
 ) -> int:
     result = session.execute(
         update(tables.jobs)
-        .where(tables.jobs.c.id == job_id)
+        .where(*_job_where(job_id, lease_token))
         .values(
             state="reconciling",
             next_attempt_at=next_attempt_at,
