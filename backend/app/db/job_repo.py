@@ -27,6 +27,10 @@ def select_claimable(session: Session, due_before: datetime) -> Any | None:
         )
         .where(
             (
+                tables.jobs.c.state.in_(("pending", "waiting_retry", "reconciling"))
+                & (tables.jobs.c.cycle_attempt_count >= CYCLE_ATTEMPT_CEILING)
+            )
+            | (
                 (tables.jobs.c.state == "pending")
                 & (tables.jobs.c.next_attempt_at <= due_before)
             )
@@ -390,6 +394,7 @@ def retry_job_transition(
         .where(
             tables.jobs.c.id == job_id,
             tables.jobs.c.state == expected_state,
+            tables.jobs.c.state.in_(("dead", "blocked")),
             tables.jobs.c.updated_at == expected_updated_at,
         )
         .values(

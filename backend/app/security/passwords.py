@@ -8,7 +8,7 @@ import hmac
 import secrets
 
 _ALGORITHM = "pbkdf2_sha256"
-_ITERATIONS = 210_000
+_ITERATIONS = 600_000
 _SALT_BYTES = 16
 
 
