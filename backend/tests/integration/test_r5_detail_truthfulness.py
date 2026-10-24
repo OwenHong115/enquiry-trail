@@ -153,7 +153,7 @@ def test_blocked_detail_outranks_review(
     body = _detail(api_client, receipt)
     # Blocked is the truth, and it outranks the pending review.
     assert body["processing_summary"] == "blocked"
-    assert body["attention"] == "blocked"
+    assert body["attention"] == "integration_blocked"
     assert body["crm"]["status"] == "blocked"
     assert body["crm"]["next_attempt_at"] is None
     assert body["requires_review"] is True

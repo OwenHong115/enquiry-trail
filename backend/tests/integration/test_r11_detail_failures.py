@@ -193,11 +193,11 @@ def test_dead_sync_is_visible_and_diagnosable(
 
     body = _detail(api_client, receipt)
     assert set(body.keys()) == DETAIL_KEYS
-    assert body["processing_summary"] == "dead"
+    assert body["processing_summary"] == "failed"
     # Dead outranks the routine review: the contact never
     # reached the CRM.
-    assert body["attention"] == "dead"
-    assert body["crm"]["status"] == "dead"
+    assert body["attention"] == "intervention_required"
+    assert body["crm"]["status"] == "failed"
     # No link row exists, so the job's error code is the diagnosis.
     assert body["crm"]["last_error_code"] == "validation_failed"
     assert body["requires_review"] is True
