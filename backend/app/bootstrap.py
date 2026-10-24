@@ -10,11 +10,11 @@ from fastapi.openapi.utils import get_openapi
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import auth, enquiries, health, intake, jobs, reviews, tasks
-from app.api.errors import ApiError, envelope_response, error_response
+from app.api.errors import ApiError, ErrorEnvelope, envelope_response, error_response
 from app.config.routing import EXPECTED_ROUTING_SHA256, ROUTING_CONFIG
 from app.db.session import make_engine, make_session_factory
 from app.domain.routing import routing_config_hash
-from app.logging import log_event
+from app.logging import configure_logging, log_event
 from app.services.clock import SystemBusinessClock
 from app.settings import Settings
 
@@ -31,12 +31,16 @@ _HTTP_CODE_MAP = {
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    configure_logging()
     settings = settings or Settings.from_env()
     if routing_config_hash(ROUTING_CONFIG) != EXPECTED_ROUTING_SHA256:
         raise RuntimeError(
             "routing config transcription does not match the authority hash"
         )
-    app = FastAPI(title="EnquiryTrail")
+    app = FastAPI(title="EnquiryTrail", responses={
+        status: {"model": ErrorEnvelope}
+        for status in (401, 403, 404, 409, 422, 500, 503)
+    })
     app.state.settings = settings
     app.state.routing_config = ROUTING_CONFIG
     app.state.clock = SystemBusinessClock()
@@ -148,17 +152,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "name": auth.COOKIE_NAME,
             }
         }
-        # Per-operation security, declared here because this
-        # FastAPI build's route decorators take no security
-        # argument. Metadata only, on the pinned operations.
-        for path, method in (
-            ("/api/v1/enquiries/{enquiry_id}/review/resolve", "post"),
-            ("/api/v1/enquiries/{enquiry_id}", "get"),
-            ("/api/v1/jobs/{id}/retry", "post"),
-        ):
-            operation = schema.get("paths", {}).get(path, {}).get(method)
-            if operation is not None:
-                operation["security"] = [{"sessionCookie": []}]
+        public_paths = {"/api/v1/auth/login", "/api/v1/health/live", "/api/v1/health/ready"}
+        for path, path_item in schema.get("paths", {}).items():
+            if path.startswith("/api/v1/") and path not in public_paths:
+                for method, operation in path_item.items():
+                    if method in {"get", "post", "put", "patch", "delete"}:
+                        operation["security"] = [{"sessionCookie": []}]
         app.openapi_schema = schema
         return schema
 

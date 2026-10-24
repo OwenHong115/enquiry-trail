@@ -130,3 +130,15 @@ def get_follow_up_task(session: Session, enquiry_id: uuid.UUID) -> Any | None:
         .order_by(tables.follow_up_tasks.c.created_at)
         .limit(1)
     ).one_or_none()
+
+
+def get_related_jobs(session: Session, enquiry_id: uuid.UUID, contact_id: uuid.UUID) -> list:
+    """Own enquiry jobs plus the stable sync job shared through its contact."""
+    return list(session.execute(
+        select(tables.jobs.c.id, tables.jobs.c.kind, tables.jobs.c.state,
+               tables.jobs.c.updated_at)
+        .where((tables.jobs.c.entity_id == enquiry_id) |
+               ((tables.jobs.c.kind == "sync_contact") &
+                (tables.jobs.c.dedupe_key == f"sync_contact:{contact_id}")))
+        .order_by(tables.jobs.c.created_at, tables.jobs.c.id)
+    ).all())
