@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 
 class ApiError(Exception):
@@ -23,6 +24,26 @@ class ApiError(Exception):
         self.code = code
         self.message = message
         self.field_errors = field_errors or []
+
+
+class EnvelopeError(BaseModel):
+    """The inner error object, exactly as error_body builds it."""
+
+    code: str
+    message: str
+    field_errors: list[dict[str, str]] = []
+    request_id: str
+    retry_after_seconds: float | None = None
+
+
+class ErrorEnvelope(BaseModel):
+    """OpenAPI model of the contract Error envelope.
+
+    Schema metadata only: runtime responses are still built by
+    error_body/envelope_response below, never by this model.
+    """
+
+    error: EnvelopeError
 
 
 def error_body(

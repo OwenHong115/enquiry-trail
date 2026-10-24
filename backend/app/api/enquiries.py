@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import COOKIE_NAME
 from app.api.display import format_display_no
-from app.api.errors import ApiError
+from app.api.errors import ApiError, ErrorEnvelope
 from app.db import enquiry_repo, health_repo
 from app.db.session import get_session
 from app.security import sessions as session_service
@@ -234,7 +234,16 @@ def build_enquiry_detail(
     )
 
 
-@router.get("/{enquiry_id}", response_model=EnquiryDetailOut)
+@router.get(
+    "/{enquiry_id}",
+    response_model=EnquiryDetailOut,
+    # Schema metadata only: enforcement stays in the route's
+    # session resolution.
+    responses={
+        401: {"model": ErrorEnvelope},
+        404: {"model": ErrorEnvelope},
+    },
+)
 def get_enquiry(
     enquiry_id: uuid.UUID,
     request: Request,
