@@ -388,7 +388,12 @@ def test_recovery_follows_the_unresolved_operation(
     claim = _claim(postgres_db, clock)
     assert claim is not None
     assert claim.job_id == job_b
-    healthy_create = FakeCrm(lookup_script=[NotFound()])
+    # A distinct remote id: half (a)'s readback already linked
+    # its contact as hs-created-1, and a fresh fake would hand
+    # the same default id to this different contact.
+    healthy_create = FakeCrm(
+        lookup_script=[NotFound()], create_remote_id="hs-created-retry-b"
+    )
     _handle(postgres_db, claim, clock, healthy_create)
 
     assert len(healthy_create.calls_of("create_contact")) == 1
