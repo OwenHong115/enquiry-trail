@@ -18,7 +18,7 @@ from app.db import job_repo
 from app.db.session import make_engine, make_session_factory
 from app.logging import log_event
 from app.ports.clock import BusinessClock
-from app.ports.crm import CrmPort
+from app.ports.crm import CrmPort, ProviderError
 from app.ports.scheduler import Scheduler
 from app.services.clock import SystemBusinessClock
 from app.settings import Settings
@@ -40,7 +40,24 @@ def run_once(
     claim = claim_next(session, worker_id, clock)
     if claim is None:
         return False
-    handle_claim(session, claim, clock, crm=crm, scheduler=scheduler)
+    try:
+        handle_claim(session, claim, clock, crm=crm, scheduler=scheduler)
+    except Exception as err:
+        # Job-level isolation lives here, not in run_until_idle:
+        # the claim is the only place job_id and attempt_no are
+        # known. Identifier only: no message, payload or contact
+        # data. The job was claimed and attempted, so return True
+        # and let the loop continue; no job.handled is emitted.
+        session.rollback()
+        log_event(
+            "job.error",
+            job_id=str(claim.job_id),
+            attempt_no=claim.attempt_no,
+            error_code=(
+                err.code if isinstance(err, ProviderError) else type(err).__name__
+            ),
+        )
+        return True
     # Identifiers and outcome only: no contact or CRM field values.
     # The read opens a transaction on the caller's session, so roll
     # it back: the next claim_next on this session must find no

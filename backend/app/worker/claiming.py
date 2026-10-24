@@ -27,6 +27,15 @@ from app.services.scheduler import BackoffScheduler
 # The retryable-before-write set for this slice, and the worker
 # contract's jitter maximum (behavior.yaml worker.jitter_max_seconds).
 RETRYABLE_CODES = frozenset({"connect_failed", "unavailable", "rate_limited"})
+PERMANENT_CODES = frozenset(
+    {
+        "validation_failed",
+        "not_found",
+        "conflict",
+        "invalid_response",
+        "director_unavailable",
+    }
+)
 JITTER_MAX_SECONDS = 0.5
 
 # behavior.yaml#worker.per_cycle_max_attempts. The schema mirrors this
@@ -175,8 +184,11 @@ def _record_provider_failure(
 ) -> bool:
     """Record a provider failure in its own committed block.
 
-    Returns False for a non-retryable, non-auth, non-unknown error,
-    which the caller re-raises; the committed intent (if any) stays.
+    Total over the provider vocabulary for the create and lookup
+    paths: every code returns True here, so the caller never
+    re-raises a ProviderError. False is returned only for a code
+    outside the policy (defensive; the vocabulary is closed), and
+    the caller re-raises then; the committed intent (if any) stays.
     Returns True when the failure was recorded, and also True when
     the lease fence was lost: then nothing was written and the
     caller must still not re-raise, because another worker owns
@@ -228,6 +240,36 @@ def _record_provider_failure(
                 job_id=claim.job_id,
                 enquiry_id=claim.entity_id,
                 operation_id=operation_id,
+            )
+        return True
+    if err.code in PERMANENT_CODES:
+        # Permanent provider failure: terminal, in one fenced
+        # block. The operation is marked failed only when the
+        # caller passed mark_operation_failed (the create path);
+        # a lookup-path failure has no operation at all.
+        with session.begin():
+            if not _lease_still_held(session, claim):
+                return True
+            if mark_operation_failed and operation_id is not None:
+                crm_repo.set_operation_failed(session, operation_id)
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="failed",
+                error_code=err.code,
+            )
+            job_repo.move_job_to_dead(
+                session,
+                claim.job_id,
+                error_code=err.code,
+                lease_token=claim.lease_token,
+            )
+            job_repo.insert_job_failed_event(
+                session,
+                job_id=claim.job_id,
+                enquiry_id=claim.entity_id,
+                error_code=err.code,
             )
         return True
     if err.code not in RETRYABLE_CODES:
@@ -305,12 +347,76 @@ def _handle_readback(
     crm: CrmPort,
     contact: object,
     operation_id: uuid.UUID,
+    scheduler: Scheduler,
 ) -> None:
-    """Read back an unresolved operation; never dispatches a create."""
+    """Read back an unresolved operation; never dispatches a create.
+
+    A failed readback never raises and never touches the
+    operation's status: retryable codes reschedule the next
+    readback, permanent codes close the job dead, and the
+    operation stays "unknown" for a future operator retry in
+    every cell. All finalizations are fenced per R8.
+    """
     context = crm_sync.make_context(claim, operation_id)
     try:
         found = crm.get_contact_by_email(contact.email_norm, context)  # type: ignore[attr-defined]
     except ProviderError as err:
+        if err.code in RETRYABLE_CODES:
+            # Stay reconciling: close this attempt and reschedule
+            # the next readback. rate_limited honours Retry-After
+            # through the scheduler's existing 300s cap.
+            if err.retry_after_seconds is not None:
+                delay = scheduler.parse_retry_after(
+                    str(err.retry_after_seconds), clock.now_utc()
+                )
+            else:
+                delay = scheduler.compute_backoff(
+                    claim.cycle_attempt_count, JITTER_MAX_SECONDS
+                )
+            with session.begin():
+                if not _lease_still_held(session, claim):
+                    return
+                job_repo.close_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    attempt_no=claim.attempt_no,
+                    outcome="readback_failed",
+                    error_code=err.code,
+                )
+                job_repo.reschedule_reconciling_job(
+                    session,
+                    claim.job_id,
+                    next_attempt_at=clock.now_utc()
+                    + timedelta(seconds=delay),
+                    lease_token=claim.lease_token,
+                )
+            return
+        if err.code in PERMANENT_CODES:
+            # Terminal, but the remote state is still unknown:
+            # the operation is preserved, never marked failed.
+            with session.begin():
+                if not _lease_still_held(session, claim):
+                    return
+                job_repo.close_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    attempt_no=claim.attempt_no,
+                    outcome="failed",
+                    error_code=err.code,
+                )
+                job_repo.move_job_to_dead(
+                    session,
+                    claim.job_id,
+                    error_code=err.code,
+                    lease_token=claim.lease_token,
+                )
+                job_repo.insert_job_failed_event(
+                    session,
+                    job_id=claim.job_id,
+                    enquiry_id=claim.entity_id,
+                    error_code=err.code,
+                )
+            return
         if err.code != "auth_failed":
             raise
         # A 401 readback resolves nothing: block, leave unresolved.
@@ -436,7 +542,9 @@ def _handle_sync_claim(
     if unresolved_id is not None:
         # Recovery is decided by the unresolved operation itself,
         # regardless of the state the job was claimed from.
-        _handle_readback(session, claim, clock, crm, contact, unresolved_id)
+        _handle_readback(
+            session, claim, clock, crm, contact, unresolved_id, scheduler
+        )
         return
     assert lookup is not None
     if isinstance(lookup.found, FoundContact):
