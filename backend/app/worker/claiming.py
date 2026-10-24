@@ -42,10 +42,9 @@ JITTER_MAX_SECONDS = 0.5
 # as CHECK(cycle_attempt_count BETWEEN 0 AND 4), so the fourth
 # execution can finish; the next claim closes any exhausted continuation.
 # Counting rule: every claim consumes one unit of the per-cycle
-# budget, whether it dispatches a create or a readback. The retry
-# branch in _record_provider_failure enforces the ceiling in-cycle;
-# the claim-time closure in claim_next is the backstop that also
-# covers crashes and readback loops.
+# budget, whether it dispatches a create or a readback. Only claim_next
+# decides budget exhaustion; failure handlers always record and reschedule.
+# The database ceiling remains a separate integrity guard.
 PER_CYCLE_MAX_ATTEMPTS = 4
 
 # behavior.yaml worker.reconciliation_read_delays_seconds (1/4/16):
@@ -77,11 +76,10 @@ def _close_at_budget_ceiling(session: Session, job: Any) -> None:
     Runs inside the claim transaction, whose SELECT ... FOR UPDATE
     row lock is the exclusivity: this is not the finalization of a
     claimed job, so there is no lease to re-check and none is
-    invented. Writes no job_attempts row, and leaves
-    external_operations untouched, so a reconciling job closed
-    here keeps its operation "unknown" for a future operator
-    retry. The job's existing last_error_code is kept when it is
-    in the provider vocabulary; otherwise "unavailable" stands in.
+    invented. Writes no new job_attempts row. An unresolved intent is
+    normalized to unknown and an unknown remains unknown, so operator
+    retry can only read back. Otherwise the existing provider error is
+    preserved, with unavailable used for an unclassified process crash.
     """
     error_code = (
         job.last_error_code
