@@ -213,6 +213,11 @@ def test_every_state_publishes_only_contract_values(
     api_client: TestClient, postgres_db: str
 ) -> None:
     clock = FakeClock(T0)
+    # One healthy fake for every successful drive in this test:
+    # its remote ids are distinct per contact, while separate
+    # FakeCrm instances would each hand out "hs-created-1" and
+    # collide on ux_crm_remote.
+    healthy = FakeCrm()
 
     # processing: submitted, prepare not yet drained.
     processing = _submit(postgres_db, clock, "state-processing@example.com")
@@ -224,12 +229,12 @@ def test_every_state_publishes_only_contract_values(
         False,
     )
     # Clear this enquiry's jobs so later claims stay targeted.
-    _run_next(postgres_db, clock, FakeCrm())
-    _run_next(postgres_db, clock, FakeCrm())
+    _run_next(postgres_db, clock, healthy)
+    _run_next(postgres_db, clock, healthy)
 
     # waiting_retry: the sync fails retryably.
     waiting = _submit(postgres_db, clock, "state-waiting@example.com")
-    _run_next(postgres_db, clock, FakeCrm())
+    _run_next(postgres_db, clock, healthy)
     _run_next(
         postgres_db,
         clock,
@@ -245,7 +250,7 @@ def test_every_state_publishes_only_contract_values(
 
     # reconciling: the create's result is unknown.
     reconciling = _submit(postgres_db, clock, "state-reconciling@example.com")
-    _run_next(postgres_db, clock, FakeCrm())
+    _run_next(postgres_db, clock, healthy)
     _run_next(
         postgres_db,
         clock,
@@ -264,7 +269,7 @@ def test_every_state_publishes_only_contract_values(
 
     # failed: the sync dies permanently (internal state "dead").
     failed = _submit(postgres_db, clock, "state-failed@example.com")
-    _run_next(postgres_db, clock, FakeCrm())
+    _run_next(postgres_db, clock, healthy)
     _run_next(
         postgres_db,
         clock,
@@ -280,8 +285,8 @@ def test_every_state_publishes_only_contract_values(
 
     # ready: prepare and sync both succeed.
     ready = _submit(postgres_db, clock, "state-ready@example.com")
-    _run_next(postgres_db, clock, FakeCrm())
-    _run_next(postgres_db, clock, FakeCrm())
+    _run_next(postgres_db, clock, healthy)
+    _run_next(postgres_db, clock, healthy)
     _assert_contract_state(
         _detail(api_client, ready.enquiry_id),
         "ready",
@@ -293,7 +298,7 @@ def test_every_state_publishes_only_contract_values(
     # blocked: the sync hits a dead credential. Last, because
     # blocking the provider is global state in this database.
     blocked = _submit(postgres_db, clock, "state-blocked@example.com")
-    _run_next(postgres_db, clock, FakeCrm())
+    _run_next(postgres_db, clock, healthy)
     _run_next(
         postgres_db,
         clock,
