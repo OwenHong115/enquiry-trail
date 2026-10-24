@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,13 @@ from datetime import timedelta
 from app.db import crm_repo, job_repo
 from app.logging import log_event
 from app.ports.clock import BusinessClock
-from app.ports.crm import CrmPort, FoundContact, NotFound, ProviderError
+from app.ports.crm import (
+    PROVIDER_ERROR_CODES,
+    CrmPort,
+    FoundContact,
+    NotFound,
+    ProviderError,
+)
 from app.ports.scheduler import Scheduler
 from app.services import crm_sync, health
 from app.services.scheduler import BackoffScheduler
@@ -25,6 +32,11 @@ JITTER_MAX_SECONDS = 0.5
 # behavior.yaml#worker.per_cycle_max_attempts. The schema mirrors this
 # as CHECK(cycle_attempt_count BETWEEN 0 AND 4), so the fourth
 # retryable failure in a cycle must end the job instead of rescheduling.
+# Counting rule: every claim consumes one unit of the per-cycle
+# budget, whether it dispatches a create or a readback. The retry
+# branch in _record_provider_failure enforces the ceiling in-cycle;
+# the claim-time closure in claim_next is the backstop that also
+# covers crashes and readback loops.
 PER_CYCLE_MAX_ATTEMPTS = 4
 
 # behavior.yaml worker.reconciliation_read_delays_seconds (1/4/16):
@@ -51,6 +63,32 @@ class ClaimedJob:
     cycle_attempt_count: int = 1
 
 
+def _close_at_budget_ceiling(session: Session, job: Any) -> None:
+    """Close a job that is already at the per-cycle budget ceiling.
+
+    Runs inside the claim transaction, whose SELECT ... FOR UPDATE
+    row lock is the exclusivity: this is not the finalization of a
+    claimed job, so there is no lease to re-check and none is
+    invented. Writes no job_attempts row, and leaves
+    external_operations untouched, so a reconciling job closed
+    here keeps its operation "unknown" for a future operator
+    retry. The job's existing last_error_code is kept when it is
+    in the provider vocabulary; otherwise "unavailable" stands in.
+    """
+    error_code = (
+        job.last_error_code
+        if job.last_error_code in PROVIDER_ERROR_CODES
+        else "unavailable"
+    )
+    job_repo.move_job_to_dead(session, job.id, error_code=error_code)
+    job_repo.insert_job_failed_event(
+        session,
+        job_id=job.id,
+        enquiry_id=job.entity_id,
+        error_code=error_code,
+    )
+
+
 def claim_next(
     session: Session, worker_id: uuid.UUID, clock: BusinessClock
 ) -> ClaimedJob | None:
@@ -60,11 +98,22 @@ def claim_next(
     next claimable job FOR UPDATE SKIP LOCKED, recover its lease
     first if the previous one expired, then stamp the new lease and
     open the attempt row.
+
+    A selected job already at the per-cycle budget ceiling is
+    closed terminally instead of stamped (stamping would take
+    cycle_attempt_count past the schema CHECK), and the loop keeps
+    scanning for the next claimable job in the same call, so a
+    poisoned job neither raises nor wedges the queue.
     """
     with session.begin():
-        job = job_repo.select_claimable(session, clock.now_utc())
-        if job is None:
-            return None
+        while True:
+            job = job_repo.select_claimable(session, clock.now_utc())
+            if job is None:
+                return None
+            if job.cycle_attempt_count >= PER_CYCLE_MAX_ATTEMPTS:
+                _close_at_budget_ceiling(session, job)
+                continue
+            break
         if job.state == "running":
             # Claimable only because its lease expired: record the
             # recovery before the new lease replaces the old token.

@@ -22,6 +22,8 @@ def select_claimable(session: Session, due_before: datetime) -> Any | None:
             tables.jobs.c.state,
             tables.jobs.c.lease_token,
             tables.jobs.c.cycle_no,
+            tables.jobs.c.cycle_attempt_count,
+            tables.jobs.c.last_error_code,
         )
         .where(
             (
@@ -62,12 +64,21 @@ def get_job_state(session: Session, job_id: uuid.UUID) -> str | None:
     ).scalar_one_or_none()
 
 
+# Mirrors the schema CHECK (cycle_attempt_count BETWEEN 0 AND 4):
+# claim_next closes a job at this ceiling instead of stamping, so
+# the guard below should never match zero rows.
+CYCLE_ATTEMPT_CEILING = 4
+
+
 def stamp_lease(
     session: Session, job_id: uuid.UUID, lease_token: uuid.UUID, lease_seconds: int
 ) -> Any:
-    return session.execute(
+    row = session.execute(
         update(tables.jobs)
-        .where(tables.jobs.c.id == job_id)
+        .where(
+            tables.jobs.c.id == job_id,
+            tables.jobs.c.cycle_attempt_count < CYCLE_ATTEMPT_CEILING,
+        )
         .values(
             state="running",
             lease_token=lease_token,
@@ -84,7 +95,16 @@ def stamp_lease(
             tables.jobs.c.cycle_no,
             tables.jobs.c.cycle_attempt_count,
         )
-    ).one()
+    ).one_or_none()
+    if row is None:
+        # Unreachable while claim_next closes jobs at the ceiling
+        # before stamping: a silent no-op here would hand out a
+        # job whose lease was never stamped.
+        raise RuntimeError(
+            f"stamp_lease matched no job at or below the cycle "
+            f"budget ceiling for job {job_id}"
+        )
+    return row
 
 
 def insert_attempt(

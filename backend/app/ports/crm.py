@@ -75,6 +75,11 @@ _PROVIDER_ERROR_CODES = frozenset(
 )
 
 
+# Public name for the same vocabulary ProviderError validates
+# against, for callers that must record an allowed code.
+PROVIDER_ERROR_CODES = _PROVIDER_ERROR_CODES
+
+
 class ProviderError(Exception):
     """A classified provider failure (vocabulary ProviderError codes)."""
 
