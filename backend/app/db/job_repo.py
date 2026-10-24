@@ -51,6 +51,17 @@ def select_claimable(session: Session, due_before: datetime) -> Any | None:
     ).one_or_none()
 
 
+def get_job_state(session: Session, job_id: uuid.UUID) -> str | None:
+    """Return the persisted job state, or None when no such job exists.
+
+    A plain read: it opens a read transaction the caller is
+    responsible for closing (see run_once in app/worker/runner).
+    """
+    return session.execute(
+        select(tables.jobs.c.state).where(tables.jobs.c.id == job_id)
+    ).scalar_one_or_none()
+
+
 def stamp_lease(
     session: Session, job_id: uuid.UUID, lease_token: uuid.UUID, lease_seconds: int
 ) -> Any:

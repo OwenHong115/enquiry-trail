@@ -14,7 +14,9 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
+from app.db import job_repo
 from app.db.session import make_engine, make_session_factory
+from app.logging import log_event
 from app.ports.clock import BusinessClock
 from app.ports.crm import CrmPort
 from app.ports.scheduler import Scheduler
@@ -39,6 +41,19 @@ def run_once(
     if claim is None:
         return False
     handle_claim(session, claim, clock, crm=crm, scheduler=scheduler)
+    # Identifiers and outcome only: no contact or CRM field values.
+    # The read opens a transaction on the caller's session, so roll
+    # it back: the next claim_next on this session must find no
+    # transaction already begun.
+    outcome = job_repo.get_job_state(session, claim.job_id)
+    session.rollback()
+    log_event(
+        "job.handled",
+        job_id=str(claim.job_id),
+        kind=claim.kind,
+        attempt_no=claim.attempt_no,
+        outcome=outcome,
+    )
     return True
 
 

@@ -13,6 +13,7 @@ from app.api.errors import ApiError, envelope_response, error_response
 from app.config.routing import EXPECTED_ROUTING_SHA256, ROUTING_CONFIG
 from app.db.session import make_engine, make_session_factory
 from app.domain.routing import routing_config_hash
+from app.logging import log_event
 from app.services.clock import SystemBusinessClock
 from app.settings import Settings
 
@@ -47,6 +48,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request.state.request_id = str(uuid.uuid4())
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
+        # Identifiers and outcome only: no headers, cookies or bodies.
+        log_event(
+            "http.request",
+            request_id=request.state.request_id,
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+        )
         return response
 
     @app.exception_handler(ApiError)
