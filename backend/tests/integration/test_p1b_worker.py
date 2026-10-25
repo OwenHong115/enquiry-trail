@@ -240,3 +240,104 @@ def test_worker_settings_validation():
         Settings(database_url="x", session_secret="s", worker_concurrency=0)
     with pytest.raises(ValueError):
         Settings(database_url="x", session_secret="s", worker_idle_poll_seconds=0)
+
+
+class _FlakyFactory:
+    """Fails session creation a bounded number of times, then works."""
+
+    def __init__(self, real, fail_times=0, fail_heartbeat_times=0):
+        self._real = real
+        self._fail = fail_times
+        self._fail_hb = fail_heartbeat_times
+        self._lock = threading.Lock()
+
+    def __call__(self):
+        with self._lock:
+            if threading.current_thread().name == "worker-heartbeat" and self._fail_hb > 0:
+                self._fail_hb -= 1
+                raise RuntimeError("database temporarily unavailable")
+            if self._fail > 0:
+                self._fail -= 1
+                raise RuntimeError("database temporarily unavailable")
+        return self._real()
+
+
+def _start_factory(postgres_db, factory, fake, stop, concurrency=1):
+    errors = []
+
+    def target():
+        try:
+            run_forever(factory, WORKER, SystemBusinessClock(), fake,
+                        scheduler=FakeScheduler(), concurrency=concurrency,
+                        idle_poll_seconds=0.2, heartbeat_seconds=0.2,
+                        shutdown_timeout_seconds=5, error_backoff_seconds=0.1,
+                        stop_event=stop, heartbeat_interval_seconds=0.1)
+        except BaseException as exc:  # captured, asserted below
+            errors.append(exc)
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    return thread, errors
+
+
+def test_db_outage_factory_recovers_and_processes(postgres_db):
+    factory = _FlakyFactory(_factory(postgres_db), fail_times=6)
+    stop = threading.Event()
+    thread, errors = _start_factory(postgres_db, factory, FakeCrm(), stop)
+    try:
+        _submit(postgres_db)
+        assert _wait_for(lambda: _jobs_done(postgres_db))
+        assert not stop.is_set()  # worker never died / never self-stopped
+        assert thread.is_alive()
+    finally:
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert errors == [], errors
+
+
+def test_failed_initial_heartbeat_does_not_kill_loop(postgres_db):
+    factory = _FlakyFactory(_factory(postgres_db), fail_heartbeat_times=3)
+    stop = threading.Event()
+    thread, errors = _start_factory(postgres_db, factory, FakeCrm(), stop)
+    try:
+        def heartbeat_row():
+            return bool(_fetch(postgres_db, "SELECT worker_id FROM leadops.worker_heartbeats WHERE worker_id=:w", {"w": WORKER}))
+        assert _wait_for(heartbeat_row)
+    finally:
+        stop.set()
+        thread.join(10)
+    assert errors == [], errors
+
+
+def test_active_job_count_idle_blocked_done(postgres_db):
+    stop = threading.Event()
+    thread = _start(postgres_db, FakeCrm(), stop)
+    try:
+        def active():
+            rows = _fetch(postgres_db, "SELECT active_job_count FROM leadops.worker_heartbeats WHERE worker_id=:w", {"w": WORKER})
+            return rows[0].active_job_count if rows else None
+        assert _wait_for(lambda: active() == 0)
+    finally:
+        stop.set()
+        thread.join(10)
+
+    started, release = threading.Event(), threading.Event()
+    stop2 = threading.Event()
+    thread2 = _start(postgres_db, _BlockingCrm(started, release), stop2)
+    try:
+        _submit(postgres_db)
+        assert started.wait(15)
+        def active2():
+            rows = _fetch(postgres_db, "SELECT active_job_count FROM leadops.worker_heartbeats WHERE worker_id=:w", {"w": WORKER})
+            return rows[0].active_job_count if rows else None
+        assert _wait_for(lambda: active2() == 1)
+        release.set()
+        assert _wait_for(lambda: _jobs_done(postgres_db))
+        assert _wait_for(lambda: active2() == 0)
+    finally:
+        release.set()
+        stop2.set()
+        thread2.join(10)
+    rows = _fetch(postgres_db, "SELECT active_job_count FROM leadops.worker_heartbeats WHERE worker_id=:w", {"w": WORKER})
+    assert rows[0].active_job_count == 0

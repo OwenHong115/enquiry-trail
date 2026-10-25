@@ -6,6 +6,8 @@ persistent runtime main() runs: bounded-concurrency slots with
 independent sessions, worker and per-job heartbeats with lease
 renewal, idle sleep until the earliest future job, bounded error
 backoff, and graceful shutdown on SIGINT/SIGTERM or a stop event.
+A slot never dies on a DB error: the whole iteration is isolated,
+logged (worker.slot_error) and retried with bounded backoff.
 """
 
 from __future__ import annotations
@@ -32,8 +34,20 @@ from app.worker.claiming import claim_next, handle_claim
 _LEASE_SECONDS = 60
 
 
+class WorkerUncleanShutdown(RuntimeError):
+    """Slots died unexpectedly or outlived the shutdown timeout."""
+
+    def __init__(self, handled: int) -> None:
+        super().__init__("worker shutdown was not clean")
+        self.handled = handled
+
+
 def _renew_loop(bind, claim, interval: float, stop: threading.Event) -> None:
-    """Renew one job's lease (DB clock) until told to stop or fenced out."""
+    """Renew one job's lease (DB clock) until told to stop or fenced out.
+
+    Transient DB errors are logged (job.heartbeat_error) and retried on
+    the next tick; only a real fence loss (zero rows renewed) stops it.
+    """
     while not stop.wait(interval):
         session = Session(bind=bind)
         try:
@@ -42,14 +56,16 @@ def _renew_loop(bind, claim, interval: float, stop: threading.Event) -> None:
                     session, claim.job_id, claim.lease_token, _LEASE_SECONDS
                 )
             if renewed == 0:
-                # Fence lost: another worker owns the job. Stop
-                # renewing; the handler's final fence will no-op.
                 log_event("job.heartbeat_fence_lost", job_id=str(claim.job_id),
                           attempt_no=claim.attempt_no)
                 return
-        except Exception:
-            session.rollback()
-            return
+        except Exception as err:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            log_event("job.heartbeat_error", job_id=str(claim.job_id),
+                      attempt_no=claim.attempt_no, error_code=type(err).__name__)
         finally:
             session.close()
 
@@ -61,11 +77,21 @@ def run_once(
     crm: CrmPort,
     scheduler: Scheduler | None = None,
     heartbeat_interval_seconds: float = 5.0,
+    claim_observer: Callable[[bool], None] | None = None,
 ) -> bool:
-    """Claim and handle at most one due job (True when one was handled)."""
+    """Claim and handle at most one due job (True when one was handled).
+
+    claim_observer(True/False) brackets actual claimed execution so
+    callers can count active jobs, not claim attempts. Known follow-up:
+    an unhandled (non-provider) exception from handle_claim is logged
+    as job.error but the job stays running until lease expiry; it is
+    not rescheduled here because finalization state is uncertain.
+    """
     claim = claim_next(session, worker_id, clock)
     if claim is None:
         return False
+    if claim_observer is not None:
+        claim_observer(True)
     stop_heartbeat = threading.Event()
     heartbeat_thread = None
     if heartbeat_interval_seconds and heartbeat_interval_seconds > 0:
@@ -92,6 +118,8 @@ def run_once(
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=heartbeat_interval_seconds + 2)
+        if claim_observer is not None:
+            claim_observer(False)
     outcome = job_repo.get_job_state(session, claim.job_id)
     session.rollback()
     log_event(
@@ -170,14 +198,15 @@ def run_forever(
 ) -> int:
     """Run persistently until stop_event is set; return jobs handled.
 
-    Slots stop claiming once stop is set and in-flight jobs finish
-    within shutdown_timeout_seconds. The worker heartbeat keeps
-    last_seen_at fresh and reports the shared active count, reset to
-    0 on clean shutdown.
+    Raises WorkerUncleanShutdown (carrying the handled count) when
+    slots die unexpectedly or outlive the shutdown timeout; in that
+    case the caller's stop_event is not set by us and worker.stopped
+    is logged with clean=False.
     """
     if concurrency < 1:
         raise ValueError("worker concurrency must be at least 1")
     stop = stop_event or threading.Event()
+    internal_stop = threading.Event()
     job_heartbeat = heartbeat_interval_seconds
     if job_heartbeat is None:
         job_heartbeat = heartbeat_seconds
@@ -185,46 +214,64 @@ def run_forever(
     active = [0]
     handled = [0]
 
+    def stopping() -> bool:
+        return stop.is_set() or internal_stop.is_set()
+
     def heartbeat_loop() -> None:
-        _upsert_worker_heartbeat(session_factory, worker_id, 0)
-        while not stop.wait(heartbeat_seconds):
+        try:
+            _upsert_worker_heartbeat(session_factory, worker_id, 0)
+        except Exception as err:
+            log_event("worker.heartbeat_error", worker_id=str(worker_id),
+                      error_code=type(err).__name__)
+        while not stopping():
+            if stop.wait(heartbeat_seconds):
+                break
+            if internal_stop.is_set():
+                break
             with lock:
                 current = active[0]
             try:
                 _upsert_worker_heartbeat(session_factory, worker_id, current)
-            except Exception:
-                pass
+            except Exception as err:
+                log_event("worker.heartbeat_error", worker_id=str(worker_id),
+                          error_code=type(err).__name__)
+
+    def _set_active(claimed: bool) -> None:
+        with lock:
+            active[0] += 1 if claimed else -1
 
     def slot() -> None:
         consecutive_errors = 0
-        while not stop.is_set():
-            session = session_factory()
+        while not stopping():
+            session: Session | None = None
+            delay = idle_poll_seconds
             try:
-                with lock:
-                    active[0] += 1
-                try:
-                    did = run_once(session, worker_id, clock, crm, scheduler,
-                                   heartbeat_interval_seconds=job_heartbeat)
-                finally:
+                session = session_factory()
+                did = run_once(session, worker_id, clock, crm, scheduler,
+                               heartbeat_interval_seconds=job_heartbeat,
+                               claim_observer=_set_active)
+                if did:
                     with lock:
-                        active[0] -= 1
+                        handled[0] += 1
+                    consecutive_errors = 0
+                    continue
+                delay = _idle_sleep_seconds(session_factory, clock, idle_poll_seconds)
             except Exception as err:
-                # Claim/DB-level isolation: log and keep looping with
-                # bounded exponential backoff, never a busy spin.
                 log_event("worker.slot_error", worker_id=str(worker_id),
                           error_code=type(err).__name__)
                 delay = min(error_backoff_seconds * (2 ** consecutive_errors), 30.0)
                 consecutive_errors += 1
-                stop.wait(delay)
-                continue
             finally:
-                session.close()
-            consecutive_errors = 0
-            if did:
-                with lock:
-                    handled[0] += 1
-                continue
-            stop.wait(_idle_sleep_seconds(session_factory, clock, idle_poll_seconds))
+                if session is not None:
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+            deadline = time.monotonic() + delay
+            while not stopping() and time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                if stop.wait(min(0.1, max(0.0, remaining))):
+                    break
 
     heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True, name="worker-heartbeat")
     heartbeat_thread.start()
@@ -235,29 +282,37 @@ def run_forever(
     for thread in slots:
         thread.start()
     log_event("worker.started", worker_id=str(worker_id), concurrency=concurrency)
+    requested = False
+    clean = False
     try:
         stop_deadline: float | None = None
         while any(thread.is_alive() for thread in slots):
             for thread in slots:
                 thread.join(timeout=0.1)
             if stop.is_set():
+                requested = True
                 if stop_deadline is None:
                     stop_deadline = time.monotonic() + shutdown_timeout_seconds
                 if time.monotonic() >= stop_deadline:
                     break
     finally:
-        stop.set()
+        internal_stop.set()
         heartbeat_thread.join(timeout=heartbeat_seconds + 2)
         alive = any(thread.is_alive() for thread in slots)
         if alive:
             log_event("worker.shutdown_timeout", worker_id=str(worker_id))
+        elif not requested and not stop.is_set():
+            log_event("worker.slot_died", worker_id=str(worker_id))
         else:
             try:
                 _upsert_worker_heartbeat(session_factory, worker_id, 0)
             except Exception:
                 pass
+        clean = not alive and (requested or stop.is_set())
         log_event("worker.stopped", worker_id=str(worker_id),
-                  handled=handled[0], clean=not alive)
+                  handled=handled[0], clean=clean)
+    if not clean:
+        raise WorkerUncleanShutdown(handled[0])
     return handled[0]
 
 
@@ -296,6 +351,7 @@ def main() -> None:
         except (ValueError, OSError):
             pass
     worker_id = uuid.uuid4()
+    clean = True
     try:
         run_forever(
             session_factory, worker_id, SystemBusinessClock(), crm,
@@ -306,9 +362,14 @@ def main() -> None:
             error_backoff_seconds=settings.worker_error_backoff_seconds,
             stop_event=stop_event,
         )
+    except WorkerUncleanShutdown:
+        # Slots may still be alive: do not close the adapter or
+        # dispose the engine under in-flight work.
+        clean = False
     finally:
-        close = getattr(crm, "close", None)
-        if close is not None:
-            close()
-        engine.dispose()
-        log_event("worker.shutdown_complete", worker_id=str(worker_id))
+        if clean:
+            close = getattr(crm, "close", None)
+            if close is not None:
+                close()
+            engine.dispose()
+        log_event("worker.shutdown_complete", worker_id=str(worker_id), clean=clean)
