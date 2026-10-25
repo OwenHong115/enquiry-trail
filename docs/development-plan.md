@@ -16,19 +16,29 @@
 
 ## Order
 
-1. **P0 (this PR)**: land the reliability closeout, the two regression
-   pins (readback ladder T+1/T+5/T+21; create/readback operation
-   identity), and these status docs. Merge only with green CI
-   (unit + real PostgreSQL integration) on the exact PR revision.
-2. **P1a (next PR)**: HTTP CRM adapter (`backend/app/adapters/crm_http.py`)
-   plus the independent provider simulator (`provider-sim/`), proven over
-   real HTTP: success, definite failure, unknown write, readback. No
-   hidden write retries. See `docs/crm-http-contract.md` in that PR.
-3. **P1b (PR 3)**: persistent worker loop, heartbeat, seed data, Compose
-   wiring.
-4. **P2**: UI, list endpoints, webhook/origin/rate-limit hardening,
-   contact-version coordination (A32), event timeline (A33).
+Phase map (authoritative): P0 reliability closeout; P1 runnable mock
+backend (P1a HTTP CRM adapter + independent simulator, P1b persistent
+worker/heartbeat/seed/Compose); P2 business operations and queries
+(contact-version coordination A32, enquiry/task lists, event timeline
+A33, owner actions, integration status/resume, worker health); P3 intake
+security (exact Origin, body-size bound, rate limits, trusted proxy,
+signed webhook); P4 core UI and template drafts; P5 AI extraction and
+fallback; P6 controlled failure demonstration; P7 connected verification
+and handover. UI is P4 and intake security is P3, never P2.
 
-Still missing after P0: the HTTP adapter, the simulator, the persistent
-worker, and the UI. No real CRM is called; no acceptance item is signed
-off in code (see `docs/acceptance-log.md`, operator-kept).
+1. **P0 (PR 1)**: reliability closeout, regression pins, status docs.
+2. **P1a (PR 2)**: HTTP CRM adapter + independent provider simulator,
+   proven over real HTTP with no hidden write retries.
+3. **P1b (PR 3)**: persistent worker, heartbeat, seed, Compose.
+4. **P2**: business operations and queries (A32, enquiry/task lists,
+   event timeline A33, owner actions, integration status/resume,
+   worker health).
+5. **P3**: intake security (exact Origin, body bound, rate limits,
+   trusted proxy, signed webhook).
+6. **P4**: core UI and template drafts. **P5**: AI extraction and
+   fallback. **P6**: controlled failure demonstration. **P7**:
+   connected verification and handover.
+
+Still missing after P0: the P1a adapter/simulator (in PR 2), P1b
+persistent worker/Compose, and all of P2-P7. No real CRM is called;
+no acceptance item is signed off in code (operator-kept record).

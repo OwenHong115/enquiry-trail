@@ -24,12 +24,14 @@ signed off here.
 
 ## Delivery boundaries (not implemented features)
 
-- No UI, list endpoints, real HTTP CRM adapter, production worker supervisor or
-  provider simulator. The console worker configures logs then refuses to start
-  without a real CRM adapter. The injectable runner is exercised with FakeCrm.
+- Delivery boundaries by phase: the HTTP CRM adapter and provider
+  simulator are P1a (separate PR, not in P0); there is no persistent
+  worker loop, heartbeat, seed, or Compose yet (P1b), no UI (P4), no
+  Origin/body/rate-limit/webhook hardening (P3), no connected/live CRM,
+  and no acceptance signoff. On the P0 revision alone the console
+  worker still refuses to start without a real CRM adapter.
 - Public deployment hardening (HTTPS cookie policy, origin policy, rate limiting,
-  request-size controls) remains in S7e/S9. This PR is the local demo reliability
-  slice, not authorization for a public production deployment.
+  request-size controls) is P3/P7 work, not authorized by this slice.
 - Readiness uses bounded pool checkout (1s), connection establishment (2s) and SQL
   execution (1s). These bound stages, not every possible network/OS failure or a
   strict end-to-end HTTP deadline. Tests cover unavailable DB and exhausted pool.
@@ -47,4 +49,7 @@ retry now uses existing related_jobs fields; no new public contract is needed.
 
 - Readback NotFound ladder is anchored at the unknown instant: next_attempt_at exactly T+1, T+5, T+21 (1/4/16 via claim cycle_attempt_count), pinned by test_closeout_regressions.py with absolute instants.
 - Create CallContext.external_operation_id equals the inserted external_operations row id; the readback context carries the same id. Pinned by the same file; FakeCrm records contexts.
-- P0 lands as its own PR (fix/p0-closeout from 652ffd7) before any CRM adapter work; adapter and closeout are never mixed in one PR. Order is P0, P1a adapter+simulator, P1b worker/Compose, P2 UI/hardening.
+- P0 lands as its own PR (fix/p0-closeout from 652ffd7) before any CRM adapter work; adapter and closeout are never mixed in one PR. Order is the authoritative phase map: P0 closeout; P1 runnable mock
+  backend (P1a adapter+simulator, P1b worker/Compose); P2 business
+  operations/queries; P3 intake security; P4 UI; P5 AI extraction;
+  P6 failure demonstration; P7 connected verification/handover.
