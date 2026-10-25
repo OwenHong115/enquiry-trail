@@ -42,3 +42,9 @@ signed off here.
 Reconcile the cycle-closure observation point and intake/preparation timing with v3.1.
 Read the published vocabulary and behavior precedence when adding states. The HTTP
 retry now uses existing related_jobs fields; no new public contract is needed.
+
+## Decisions confirmed 2026-10-26 (P0 closeout)
+
+- Readback NotFound ladder is anchored at the unknown instant: next_attempt_at exactly T+1, T+5, T+21 (1/4/16 via claim cycle_attempt_count), pinned by test_closeout_regressions.py with absolute instants.
+- Create CallContext.external_operation_id equals the inserted external_operations row id; the readback context carries the same id. Pinned by the same file; FakeCrm records contexts.
+- P0 lands as its own PR (fix/p0-closeout from 652ffd7) before any CRM adapter work; adapter and closeout are never mixed in one PR. Order is P0, P1a adapter+simulator, P1b worker/Compose, P2 UI/hardening.

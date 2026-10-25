@@ -81,6 +81,8 @@ Retryable failures wait 1/4/16 seconds; a lost create response is reconciled by 
 
 ## State
 
+Order: P0 reliability closeout, then P1 (HTTP CRM adapter + provider simulator, then persistent worker/seed/Compose), then P2 (UI/hardening). Still missing at the P0 snapshot: real HTTP CRM adapter, provider simulator, persistent worker loop, UI.
+
 | Area | Status |
 |---|---|
 | S1 normalization and routing | complete |
@@ -90,12 +92,15 @@ Retryable failures wait 1/4/16 seconds; a lost create response is reconciled by 
 | S5 CRM sync and field preservation | complete |
 | S6 retry, reconciliation, provider blocking | complete |
 | S7a API sessions and CSRF | complete |
-| S7b intake endpoint | in progress |
-| S7c read endpoints and the detail shape | next |
-| S7d operator actions and conflict mapping | planned |
-| S7e webhook, rate limits, origin and proxy handling | planned |
-| S8 extraction and fault injection | planned |
-| S9 HTTP adapters, provider simulator, UI, delivery | planned |
+| S7b intake endpoint | complete |
+| S7c read endpoints and the detail shape | complete |
+| S7d operator actions and conflict mapping | complete |
+| S7e webhook, rate limits, origin and proxy handling | planned (P2) |
+| S8 extraction and fault injection | planned (P2) |
+| P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | locally complete on fix/p0-closeout; merge/CI gate in docs/closeout-review.md |
+| P1a HTTP CRM adapter + provider simulator | next after P0 merges |
+| P1b persistent worker, heartbeat, seed, Compose | planned (PR 3) |
+| S9 UI, delivery | planned (P2); still missing |
 
 Deferred acceptance items: A13, A18, A19, A20, A22, A23, A26, A27, A29, A30, A32, A33.
 A07 is proven only for the schema half until the domain phone rejection is green.

@@ -1,4 +1,4 @@
-# Reliability closeout review — 2026-10-25 (Australia/Sydney)
+# Reliability closeout review — 2026-10-26 (Australia/Sydney)
 
 Source baseline: original fix/reliability at 738a1d7. Work was performed in an
 isolated source snapshot because the original Project-Plans path is outside this
@@ -17,30 +17,30 @@ session's writable roots. The original branch and remote PR were not modified.
 
 ## Observed evidence
 
-- New status/logging tests before implementation: 3 failed for the intended behavior.
-- After R17/detail implementation: `46 passed, 1 warning in 4.93s` (all then-current
-  unit tests, HTTP retry test, and both R17 PostgreSQL tests).
-- Budget/password tests before their implementation: `3 failed, 2 passed in 6.18s`;
-  failures were handler-owned terminal timing and the old password work factor.
-- A later full-suite run was interrupted during follow-up by automatic approval
-  review, which reported unauthorized Visual Studio Telemetry. The Python runner
-  denied subprocesses and non-loopback sockets, but the execution environment still
-  reported the external activity. No further full suite was attempted.
-- Partial output contained a failure at the old related_jobs=[] placeholder. Source
-  inspection identified test_api_detail.py's obsolete assertion, now replaced with
-  stronger actual-job shape, identity, terminal-state and timestamp checks. There
-  is no final result for that run; the final budget/password/expectation changes
-  have not been certified by a complete green run.
-- One existing Starlette TestClient/httpx deprecation warning remains; dependencies
-  were not changed to conceal it.
+- 2026-10-26, on the closeout revision (652ffd7 + regression pins
+  3e45814, branch fix/p0-closeout; git fetch origin confirmed main
+  unmoved at 0156c67):
+  - cd backend; .venv\\Scripts\\python.exe -m pytest tests/unit -q
+    -> 45 passed in 1.55s
+  - DATABASE_URL=postgresql+psycopg://leadops:leadops@127.0.0.1:55432/leadops; .venv\\Scripts\\python.exe -m pytest tests/integration -q
+    -> 130 passed, 1 warning in 111.63s (128 pre-existing + 2 new pins;
+    the known Starlette/httpx deprecation warning only)
+  - Afterwards: 0 leadops_test_% databases and 0 test connections.
+- Regression pins (test_closeout_regressions.py): readback NotFound
+  next_attempt_at exactly T+1, T+5, T+21; create CallContext
+  external_operation_id equals the inserted external_operations id and
+  the readback context carries the same id. Both fail when the
+  pre-closeout behaviour (fixed 4s readback delay; create context
+  without the operation id) is temporarily restored, and pass on the
+  closeout revision.
+- Earlier partial evidence from the source snapshot is superseded by
+  the complete run above.
 
 ## Required before merge
 
-1. Apply the patch series to the original baseline (or resolve against newer work).
-2. Run both suites on the final commit in an environment where test execution does
-   not trigger unauthorized telemetry; verify test-DB connections return to baseline.
-3. Push that commit and obtain its real PostgreSQL CI result.
-4. Use docs/pr-description.md to update the actual PR and review the final diff.
+1. Push fix/p0-closeout and obtain green CI (unit + real PostgreSQL
+   integration) on the exact PR revision.
+2. Review the final diff; merge to main. Do not mix the CRM adapter
+   into this PR.
 
-No remote CI run, production readiness, or manual acceptance signoff is claimed.
-Implementation is ready for review; merge readiness remains blocked on these gates.
+No remote CI result, production readiness, or manual acceptance signoff is claimed until CI reports on the pushed PR revision. Local merge gate: complete (see above). Remaining gate: green CI on the PR revision, then merge.
