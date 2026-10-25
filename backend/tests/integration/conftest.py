@@ -26,6 +26,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 TABLES_UNDER_TEST = (
     "leadops.worker_heartbeats",
+    "leadops.operators",
     "leadops.sessions",
     "leadops.integration_health",
     "leadops.ingestion_receipts",
