@@ -108,7 +108,7 @@ P1a (this branch) delivers the HTTP CRM adapter and provider simulator. Still mi
 | S8 extraction and fault injection | planned (P5 AI extraction; fault demonstration P6) |
 | P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | locally complete on fix/p0-closeout; merge/CI gate in docs/closeout-review.md |
 | P1a HTTP CRM adapter + provider simulator | implemented on feat/crm-http-adapter (stacked on P0 until P0 merges); PR 2 |
-| P1b persistent worker, heartbeat, seed, Compose | planned (P1b, PR 3) |
+| P1b persistent worker, heartbeat, seed, Compose | worker runtime implemented on feat/p1b-persistent-worker (P1b-1); seed/Compose still planned (P1b-2) |
 | P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | planned (P2) |
 | S9 UI, delivery | UI planned (P4); connected verification/handover P7; still missing |
 
