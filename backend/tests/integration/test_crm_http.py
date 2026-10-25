@@ -159,6 +159,18 @@ def test_500_after_commit_is_unknown_then_readback_finds(sim):
     assert isinstance(found, FoundContact)
 
 
+def test_disconnect_after_commit_is_unknown_and_committed(sim):
+    # Real connection close without a response (RemoteProtocolError),
+    # not a delayed 500: the write committed, result is unknown, and
+    # exactly one create was sent.
+    _fault(sim, "disconnect_after_commit", "create")
+    assert _code(lambda: _adapter(sim).create_contact(_fields(), _ctx())) == "result_unknown"
+    assert _counts(sim)["counts"]["create"] == 1
+    assert _counts(sim)["contacts"] == 1
+    found = _adapter(sim).get_contact_by_email(_fields().email, _ctx())
+    assert isinstance(found, FoundContact)
+
+
 def test_timeout_after_write_is_unknown_within_deadline(sim):
     _fault(sim, "timeout_after_commit", "create")
     start = time.monotonic()

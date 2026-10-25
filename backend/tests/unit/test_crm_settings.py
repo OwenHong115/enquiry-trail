@@ -26,3 +26,10 @@ def test_mock_mode_resolves_adapter_not_fake():
 def test_bad_mode_rejected():
     with pytest.raises(ValueError):
         Settings(database_url=DB, session_secret="s", crm_mode="bogus")
+
+
+def test_invalid_crm_base_url_rejected_at_startup():
+    with pytest.raises(ValueError):
+        Settings(database_url=DB, session_secret='s', crm_mode='http', crm_base_url='ftp://example.com', crm_token='t')
+    with pytest.raises(ValueError):
+        Settings(database_url=DB, session_secret='s', crm_mode='http', crm_base_url='http://', crm_token='t')
