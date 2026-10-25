@@ -286,7 +286,11 @@ def main() -> None:
     def _signal_handler(signum, frame):  # pragma: no cover - process level
         stop_event.set()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if sigbreak is not None:
+        signals.append(sigbreak)
+    for sig in signals:
         try:
             signal.signal(sig, _signal_handler)
         except (ValueError, OSError):
