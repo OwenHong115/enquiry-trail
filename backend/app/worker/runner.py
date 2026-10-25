@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db import job_repo
 from app.db.session import make_engine, make_session_factory
-from app.logging import log_event
+from app.logging import configure_logging, log_event
 from app.ports.clock import BusinessClock
 from app.ports.crm import CrmPort, ProviderError
 from app.ports.scheduler import Scheduler
@@ -116,6 +116,7 @@ def _resolve_crm() -> CrmPort:
 
 def main() -> None:
     """Console-script entrypoint: fail fast until a CRM adapter exists."""
+    configure_logging()
     settings = Settings.from_env()
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)

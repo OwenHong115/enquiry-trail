@@ -81,6 +81,17 @@ Retryable failures wait 1/4/16 seconds; a lost create response is reconciled by 
 
 ## State
 
+Phase map (authoritative): P0 reliability closeout; P1 runnable mock
+backend (P1a HTTP CRM adapter + independent simulator, P1b persistent
+worker/heartbeat/seed/Compose); P2 business operations and queries
+(contact-version coordination A32, enquiry/task lists, event timeline
+A33, owner actions, integration status/resume, worker health); P3 intake
+security (exact Origin, body-size bound, rate limits, trusted proxy,
+signed webhook); P4 core UI and template drafts; P5 AI extraction and
+fallback; P6 controlled failure demonstration; P7 connected verification
+and handover. UI is P4 and intake security is P3, never P2.
+Still missing at the P0 snapshot (before P1a merges): the HTTP CRM adapter and provider simulator delivered by P1a, the persistent worker loop (P1b), and the UI (P4).
+
 | Area | Status |
 |---|---|
 | S1 normalization and routing | complete |
@@ -90,12 +101,16 @@ Retryable failures wait 1/4/16 seconds; a lost create response is reconciled by 
 | S5 CRM sync and field preservation | complete |
 | S6 retry, reconciliation, provider blocking | complete |
 | S7a API sessions and CSRF | complete |
-| S7b intake endpoint | in progress |
-| S7c read endpoints and the detail shape | next |
-| S7d operator actions and conflict mapping | planned |
-| S7e webhook, rate limits, origin and proxy handling | planned |
-| S8 extraction and fault injection | planned |
-| S9 HTTP adapters, provider simulator, UI, delivery | planned |
+| S7b intake endpoint | complete |
+| S7c read endpoints and the detail shape | complete |
+| S7d operator actions and conflict mapping | complete |
+| S7e webhook, rate limits, origin and proxy handling | planned (P3 intake security) |
+| S8 extraction and fault injection | planned (P5 AI extraction; fault demonstration P6) |
+| P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | locally complete on fix/p0-closeout; merge/CI gate in docs/closeout-review.md |
+| P1a HTTP CRM adapter + provider simulator | next after P0 merges |
+| P1b persistent worker, heartbeat, seed, Compose | planned (P1b, PR 3) |
+| P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | planned (P2) |
+| S9 UI, delivery | UI planned (P4); connected verification/handover P7; still missing |
 
 Deferred acceptance items: A13, A18, A19, A20, A22, A23, A26, A27, A29, A30, A32, A33.
 A07 is proven only for the schema half until the domain phone rejection is green.

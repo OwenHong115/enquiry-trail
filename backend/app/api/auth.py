@@ -22,10 +22,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 # so an unknown username costs the same PBKDF2 work as a wrong
 # password and does not leak existence through timing. Nothing is
 # hashed at import time; this is a literal.
-_DUMMY_PASSWORD_HASH = (
-    "pbkdf2_sha256$210000$dAmCSxFPey2D971mOX5uwg==$"
-    "FKsjVonXarvaym4vr+QFZWY9PvVM59CLnBrn7/sBhiA="
-)
+_DUMMY_PASSWORD_HASH = 'pbkdf2_sha256$600000$bGVhZG9wcy1kdW1teS12MiE=$wq+NXUb6T0+OHS7A1pR34IsOO1Nwy0LZgx3w6GH9hfU='
 
 COOKIE_NAME = "leadops_session"
 CSRF_HEADER = "X-CSRF-Token"

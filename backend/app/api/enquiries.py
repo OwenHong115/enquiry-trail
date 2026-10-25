@@ -88,6 +88,13 @@ class NotificationOut(BaseModel):
     last_error_code: str | None
 
 
+class RelatedJobOut(BaseModel):
+    id: uuid.UUID
+    kind: str
+    state: str
+    updated_at: datetime
+
+
 class EnquiryDetailOut(BaseModel):
     id: uuid.UUID
     display_no: str
@@ -114,7 +121,7 @@ class EnquiryDetailOut(BaseModel):
     notification: NotificationOut
     local_prepared_at: datetime | None
     required_contact_version: int
-    related_jobs: list
+    related_jobs: list[RelatedJobOut]
 
 
 def task_out_from_row(task_row) -> TaskOut:
@@ -177,7 +184,9 @@ def map_detail_status(
     state raises, so a new internal state can never leak through
     as a public status.
     """
-    if sync_state == "succeeded":
+    if prepared_and_synced:
+        summary, attention, crm_status = "ready", "none", "synced"
+    elif sync_state == "succeeded":
         summary, attention, crm_status = (
             "ready" if prepared_and_synced else "processing",
             "none",
@@ -190,7 +199,7 @@ def map_detail_status(
 
     # next_attempt_at is published ONLY for waiting_retry.
     next_attempt_at = (
-        sync_next_attempt_at if sync_state == "waiting_retry" else None
+        sync_next_attempt_at if sync_state == "waiting_retry" and not prepared_and_synced else None
     )
 
     # A pending review overrides only a base attention of "none":
@@ -202,7 +211,7 @@ def map_detail_status(
 
     # A blocked provider forces integration_blocked, and the
     # blocked summary when the job itself is blocked or absent.
-    if provider_blocked:
+    if provider_blocked and not prepared_and_synced and summary != "failed":
         attention = "integration_blocked"
         if sync_state in (None, "blocked"):
             summary = "blocked"
@@ -325,7 +334,10 @@ def build_enquiry_detail(
         ),
         local_prepared_at=detail.local_prepared_at,
         required_contact_version=detail.required_contact_version,
-        related_jobs=[],
+        related_jobs=[RelatedJobOut(id=row.id, kind=row.kind, state=row.state,
+                                   updated_at=row.updated_at)
+                      for row in enquiry_repo.get_related_jobs(
+                          session, enquiry_id, detail.contact_id)],
     )
 
 

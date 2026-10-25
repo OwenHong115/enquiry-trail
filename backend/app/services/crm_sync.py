@@ -105,7 +105,7 @@ def begin_sync(session: Session, claim: ClaimedJob, crm: CrmPort) -> SyncLookup:
             ),
             request_hash=_request_hash(sent_fields),
         )
-        return SyncLookup(contact, context, found, operation_id)
+        return SyncLookup(contact, make_context(claim, operation_id), found, operation_id)
     if isinstance(found, FoundContact):
         return SyncLookup(contact, context, found, None)
     raise ValueError(f"unexpected CRM lookup result: {found!r}")

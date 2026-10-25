@@ -132,7 +132,14 @@ def test_ready_detail_matches_fixture_shape(
     assert body["draft"] is None
     assert body["enrichment"] is None
     assert body["notification"]["status"] == "disabled"
-    assert body["related_jobs"] == []
+    related = body["related_jobs"]
+    assert len(related) == 2
+    assert {job["kind"] for job in related} == {"prepare_enquiry", "sync_contact"}
+    assert all(job["state"] == "succeeded" for job in related)
+    assert all(set(job) == {"id", "kind", "state", "updated_at"} for job in related)
+    assert all(uuid.UUID(job["id"]) for job in related)
+    assert all(datetime.fromisoformat(job["updated_at"].replace("Z", "+00:00"))
+               for job in related)
 
 
 def test_processing_detail_right_after_submit(

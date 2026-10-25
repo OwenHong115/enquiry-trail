@@ -40,18 +40,16 @@ JITTER_MAX_SECONDS = 0.5
 
 # behavior.yaml#worker.per_cycle_max_attempts. The schema mirrors this
 # as CHECK(cycle_attempt_count BETWEEN 0 AND 4), so the fourth
-# retryable failure in a cycle must end the job instead of rescheduling.
+# execution can finish; the next claim closes any exhausted continuation.
 # Counting rule: every claim consumes one unit of the per-cycle
-# budget, whether it dispatches a create or a readback. The retry
-# branch in _record_provider_failure enforces the ceiling in-cycle;
-# the claim-time closure in claim_next is the backstop that also
-# covers crashes and readback loops.
+# budget, whether it dispatches a create or a readback. Only claim_next
+# decides budget exhaustion; failure handlers always record and reschedule.
+# The database ceiling remains a separate integrity guard.
 PER_CYCLE_MAX_ATTEMPTS = 4
 
 # behavior.yaml worker.reconciliation_read_delays_seconds (1/4/16):
 # the first readback follows the unknown at +1s, the next at +4s.
 FIRST_READBACK_DELAY_SECONDS = 1
-READBACK_DELAY_SECONDS = 4
 
 # behavior.yaml#worker.lease_seconds. Lease and heartbeat columns are
 # OperationalClock-owned, so this duration is applied to the database
@@ -78,17 +76,23 @@ def _close_at_budget_ceiling(session: Session, job: Any) -> None:
     Runs inside the claim transaction, whose SELECT ... FOR UPDATE
     row lock is the exclusivity: this is not the finalization of a
     claimed job, so there is no lease to re-check and none is
-    invented. Writes no job_attempts row, and leaves
-    external_operations untouched, so a reconciling job closed
-    here keeps its operation "unknown" for a future operator
-    retry. The job's existing last_error_code is kept when it is
-    in the provider vocabulary; otherwise "unavailable" stands in.
+    invented. Writes no new job_attempts row. An unresolved intent is
+    normalized to unknown and an unknown remains unknown, so operator
+    retry can only read back. Otherwise the existing provider error is
+    preserved, with unavailable used for an unclassified process crash.
     """
     error_code = (
         job.last_error_code
         if job.last_error_code in PROVIDER_ERROR_CODES
         else "unavailable"
     )
+    if job.kind == "sync_contact":
+        unresolved = crm_repo.get_unresolved_operation_by_job(session, job.id)
+        if unresolved is not None:
+            # An intent left by a crashed dispatch is uncertain, not evidence
+            # that the provider did not write. Manual retry must read back.
+            crm_repo.set_operation_unknown(session, unresolved.id)
+            error_code = "result_unknown"
     job_repo.move_job_to_dead(session, job.id, error_code=error_code)
     job_repo.insert_job_failed_event(
         session,
@@ -283,34 +287,6 @@ def _record_provider_failure(
         return True
     if err.code not in RETRYABLE_CODES:
         return False
-    if claim.cycle_attempt_count >= PER_CYCLE_MAX_ATTEMPTS:
-        # R1 budget exhausted for this cycle: die terminally instead
-        # of rescheduling, even when the provider sent a retry_after.
-        with session.begin():
-            if not _lease_still_held(session, claim):
-                return True
-            if mark_operation_failed and operation_id is not None:
-                crm_repo.set_operation_failed(session, operation_id)
-            job_repo.close_attempt(
-                session,
-                job_id=claim.job_id,
-                attempt_no=claim.attempt_no,
-                outcome="failed",
-                error_code=err.code,
-            )
-            job_repo.move_job_to_dead(
-                session,
-                claim.job_id,
-                error_code=err.code,
-                lease_token=claim.lease_token,
-            )
-            job_repo.insert_job_failed_event(
-                session,
-                job_id=claim.job_id,
-                enquiry_id=claim.entity_id,
-                error_code=err.code,
-            )
-        return True
     if err.retry_after_seconds is not None:
         delay = scheduler.parse_retry_after(
             str(err.retry_after_seconds), clock.now_utc()
@@ -462,7 +438,7 @@ def _handle_readback(
                 session,
                 claim.job_id,
                 next_attempt_at=clock.now_utc()
-                + timedelta(seconds=READBACK_DELAY_SECONDS),
+                + timedelta(seconds=scheduler.compute_backoff(claim.cycle_attempt_count, 0.0)),
                 lease_token=claim.lease_token,
             )
         return
