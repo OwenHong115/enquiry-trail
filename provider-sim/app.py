@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import time
 import uuid
@@ -89,6 +90,18 @@ class Handler(BaseHTTPRequestHandler):
                 commit()
             if mode == "error_after_commit":
                 self._send(500, {"error": "internal_after_commit"})
+            elif mode == "disconnect_after_commit":
+                # Real reset: commit, then close without any response
+                # so the client observes RemoteProtocolError.
+                self.close_connection = True
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    self.connection.close()
+                except OSError:
+                    pass
             else:
                 time.sleep(float(os.environ.get("SIM_SLOW_SECONDS", "2")))
                 self._send(500, {"error": "after_commit_timeout"})
@@ -171,17 +184,23 @@ class Handler(BaseHTTPRequestHandler):
             if not body.get("email") or not body.get("firstname"):
                 self._send(422, {"error": "validation_failed"})
                 return
-            if body["email"] in _by_email:
+            with _lock:
+                duplicate = body["email"] in _by_email
+            if duplicate:
                 self._send(409, {"error": "duplicate"})
                 return
             def commit():
-                cid = f"sim-{uuid.uuid4().hex[:12]}"
-                contact = {"id": cid, "email": body["email"],
-                           "firstname": body.get("firstname"),
-                           "lastname": body.get("lastname"), "phone": body.get("phone")}
-                _contacts[cid] = contact
-                _by_email[body["email"]] = cid
-                return contact
+                with _lock:
+                    existing = _by_email.get(body["email"])
+                    if existing is not None:
+                        return _contacts[existing]
+                    cid = f"sim-{uuid.uuid4().hex[:12]}"
+                    contact = {"id": cid, "email": body["email"],
+                               "firstname": body.get("firstname"),
+                               "lastname": body.get("lastname"), "phone": body.get("phone")}
+                    _contacts[cid] = contact
+                    _by_email[body["email"]] = cid
+                    return contact
             mode = _take_fault("create")
             if mode in ("error_after_commit", "timeout_after_commit", "disconnect_after_commit"):
                 created = {}

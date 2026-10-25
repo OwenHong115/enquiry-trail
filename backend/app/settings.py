@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,10 @@ class Settings:
             self.crm_base_url.strip() and self.crm_token.strip()
         ):
             raise ValueError("CRM_BASE_URL and CRM_TOKEN are required in http mode")
+        if self.crm_base_url.strip():
+            parsed = urlparse(self.crm_base_url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise ValueError("CRM_BASE_URL must be an http(s) URL with a host")
 
     @classmethod
     def from_env(cls) -> "Settings":

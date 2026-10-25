@@ -126,6 +126,11 @@ def main() -> None:
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
     crm = _resolve_crm(settings)
-    run_until_idle(
-        session_factory, uuid.uuid4(), SystemBusinessClock(), crm
-    )
+    try:
+        run_until_idle(
+            session_factory, uuid.uuid4(), SystemBusinessClock(), crm
+        )
+    finally:
+        close = getattr(crm, "close", None)
+        if close is not None:
+            close()
