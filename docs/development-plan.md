@@ -27,8 +27,8 @@ fallback; P6 controlled failure demonstration; P7 connected verification
 and handover. UI is P4 and intake security is P3, never P2.
 
 1. **P0 (PR 1)**: reliability closeout, regression pins, status docs.
-2. **P1a (PR 2)**: HTTP CRM adapter + independent provider simulator,
-   proven over real HTTP with no hidden write retries.
+2. **P1a (PR 2, this branch)**: HTTP CRM adapter + independent provider
+   simulator, proven over real HTTP with no hidden write retries.
 3. **P1b (PR 3)**: persistent worker, heartbeat, seed, Compose.
 4. **P2**: business operations and queries (A32, enquiry/task lists,
    event timeline A33, owner actions, integration status/resume,
@@ -39,6 +39,8 @@ and handover. UI is P4 and intake security is P3, never P2.
    fallback. **P6**: controlled failure demonstration. **P7**:
    connected verification and handover.
 
-Still missing after P0: the P1a adapter/simulator (in PR 2), P1b
-persistent worker/Compose, and all of P2-P7. No real CRM is called;
-no acceptance item is signed off in code (operator-kept record).
+Still missing after P1a: P1b persistent worker/Compose and all of
+P2-P7. Local P1a evidence: 49 unit + 142 integration green before the
+deadline/robustness fixes (includes 12 real-HTTP tests); simulator
+create counts prove one write/attempt. No real CRM is called; no
+acceptance item is signed off in code (operator-kept record).
