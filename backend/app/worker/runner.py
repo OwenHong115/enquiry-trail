@@ -13,6 +13,7 @@ logged (worker.slot_error) and retried with bounded backoff.
 from __future__ import annotations
 
 import signal
+import sys
 import threading
 import time
 import uuid
@@ -373,3 +374,6 @@ def main() -> None:
                 close()
             engine.dispose()
         log_event("worker.shutdown_complete", worker_id=str(worker_id), clean=clean)
+    if not clean:
+        # Non-zero so a supervisor / Compose restart policy can act.
+        sys.exit(1)
