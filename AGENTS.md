@@ -35,7 +35,7 @@ The API never migrates on start-up.
     backend/app/api/          HTTP validation, auth, error envelope
     backend/app/security/     passwords, sessions, CSRF
     backend/app/config/       app-owned router configuration, hash-guarded
-    backend/app/adapters/     wire implementations (not built yet)
+    backend/app/adapters/     HTTP CRM adapter (crm_http.py); provider-sim/ is the standalone simulator
     backend/app/bootstrap.py  the single composition root
 
 Dependency direction: `api -> services -> (domain | ports | db)`. Adapters implement ports
@@ -90,7 +90,7 @@ security (exact Origin, body-size bound, rate limits, trusted proxy,
 signed webhook); P4 core UI and template drafts; P5 AI extraction and
 fallback; P6 controlled failure demonstration; P7 connected verification
 and handover. UI is P4 and intake security is P3, never P2.
-Still missing at the P0 snapshot (before P1a merges): the HTTP CRM adapter and provider simulator delivered by P1a, the persistent worker loop (P1b), and the UI (P4).
+P1a (this branch) delivers the HTTP CRM adapter and provider simulator. Still missing: persistent worker loop (P1b), P2 business operations, P3 intake security, and the UI (P4).
 
 | Area | Status |
 |---|---|
@@ -107,7 +107,7 @@ Still missing at the P0 snapshot (before P1a merges): the HTTP CRM adapter and p
 | S7e webhook, rate limits, origin and proxy handling | planned (P3 intake security) |
 | S8 extraction and fault injection | planned (P5 AI extraction; fault demonstration P6) |
 | P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | locally complete on fix/p0-closeout; merge/CI gate in docs/closeout-review.md |
-| P1a HTTP CRM adapter + provider simulator | next after P0 merges |
+| P1a HTTP CRM adapter + provider simulator | implemented on feat/crm-http-adapter (stacked on P0 until P0 merges); PR 2 |
 | P1b persistent worker, heartbeat, seed, Compose | planned (P1b, PR 3) |
 | P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | planned (P2) |
 | S9 UI, delivery | UI planned (P4); connected verification/handover P7; still missing |
