@@ -131,3 +131,58 @@ def test_invalid_url_maps_to_provider_error():
         assert exc.value.code == "invalid_response"
     finally:
         adapter.close()
+
+
+class _MixedHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def do_GET(self):
+        if "trickle" in self.path:
+            _TrickleHandler._trickle(self)
+            return
+        # slow-success: responds whole after 2.5s
+        time.sleep(2.5)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(BODY)))
+        self.end_headers()
+        self.wfile.write(BODY)
+
+
+def test_concurrent_timeout_does_not_abort_healthy_call():
+    server, base = _serve(_MixedHandler)
+    adapter = HttpCrmAdapter(base, "t")
+    outcomes: dict = {}
+
+    def trickle():
+        start = time.monotonic()
+        try:
+            adapter.get_contact_by_email("trickle@b.c", _ctx(2.0))
+            outcomes["trickle"] = ("ok", time.monotonic() - start)
+        except ProviderError as exc:
+            outcomes["trickle"] = (exc.code, time.monotonic() - start)
+
+    def slow():
+        try:
+            found = adapter.get_contact_by_email("slow@b.c", _ctx(6.0))
+            outcomes["slow"] = ("ok", found.remote_id)
+        except ProviderError as exc:
+            outcomes["slow"] = (exc.code, None)
+
+    slow_thread = threading.Thread(target=slow)
+    trickle_thread = threading.Thread(target=trickle)
+    slow_thread.start()
+    time.sleep(0.2)
+    trickle_thread.start()
+    trickle_thread.join(10)
+    slow_thread.join(10)
+    try:
+        assert outcomes["trickle"][0] == "unavailable"
+        assert outcomes["trickle"][1] <= 2.0 + 0.5
+        assert outcomes["slow"] == ("ok", "sim-1")
+    finally:
+        adapter.close()
+        server.shutdown()

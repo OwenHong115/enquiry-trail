@@ -99,12 +99,18 @@ class HttpCrmAdapter:
                                 pool=min(_POOL_TIMEOUT, remaining))
         holder: dict = {}
 
+        client_ready = threading.Event()
+
         def run() -> None:
             client = self._client
             owned_here = False
+            holder["client"] = client
+            client_ready.set()
             if client is None:
                 client = httpx.Client(timeout=timeout)
                 owned_here = True
+                holder["client"] = client
+                client_ready.set()
                 with self._lock:
                     self._inflight.add(client)
             try:
@@ -145,7 +151,15 @@ class HttpCrmAdapter:
             # body); an injected client is caller-owned, so the daemon
             # thread is abandoned and its per-read timeout bounds it.
             if self._owns_client:
-                self.close()
+                # Close only this call's client, never a concurrent
+                # call's: adapter.close() is for full shutdown.
+                client_ready.wait(_ABORT_GRACE_SECONDS)
+                current = holder.get("client")
+                if current is not None:
+                    try:
+                        current.close()
+                    except Exception:
+                        pass
             thread.join(_ABORT_GRACE_SECONDS)
             self._log(context, method, timeout_code, start)
             raise ProviderError(timeout_code)
