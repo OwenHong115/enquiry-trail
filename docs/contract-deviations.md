@@ -24,12 +24,10 @@ signed off here.
 
 ## Delivery boundaries (not implemented features)
 
-- Delivery boundaries by phase: the HTTP CRM adapter and provider
-  simulator are P1a (separate PR, not in P0); there is no persistent
-  worker loop, heartbeat, seed, or Compose yet (P1b), no UI (P4), no
-  Origin/body/rate-limit/webhook hardening (P3), no connected/live CRM,
-  and no acceptance signoff. On the P0 revision alone the console
-  worker still refuses to start without a real CRM adapter.
+- Adapter and simulator exist (P1a); no persistent worker loop,
+  heartbeat, seed, or Compose (P1b); no UI (P4); no Origin/body/
+  rate-limit/webhook hardening (P3); no connected/live CRM; no
+  acceptance signoff.
 - Public deployment hardening (HTTPS cookie policy, origin policy, rate limiting,
   request-size controls) is P3/P7 work, not authorized by this slice.
 - Readiness uses bounded pool checkout (1s), connection establishment (2s) and SQL
@@ -49,7 +47,10 @@ retry now uses existing related_jobs fields; no new public contract is needed.
 
 - Readback NotFound ladder is anchored at the unknown instant: next_attempt_at exactly T+1, T+5, T+21 (1/4/16 via claim cycle_attempt_count), pinned by test_closeout_regressions.py with absolute instants.
 - Create CallContext.external_operation_id equals the inserted external_operations row id; the readback context carries the same id. Pinned by the same file; FakeCrm records contexts.
-- P0 lands as its own PR (fix/p0-closeout from 652ffd7) before any CRM adapter work; adapter and closeout are never mixed in one PR. Order is the authoritative phase map: P0 closeout; P1 runnable mock
-  backend (P1a adapter+simulator, P1b worker/Compose); P2 business
-  operations/queries; P3 intake security; P4 UI; P5 AI extraction;
-  P6 failure demonstration; P7 connected verification/handover.
+- P0 lands as its own PR (fix/p0-closeout from 652ffd7) before any CRM adapter work; adapter and closeout are never mixed in one PR. Order is the authoritative phase map: P0 closeout; P1 runnable mock backend (P1a adapter+simulator, P1b worker/Compose); P2 business operations/queries; P3 intake security; P4 UI; P5 AI extraction; P6 failure demonstration; P7 connected verification/handover.
+
+## Decisions confirmed 2026-10-26 (P1a adapter)
+
+- Create 409 is definite already-exists: the adapter reads back by email and returns the found contact (one extra read, never a second create); a missing readback keeps conflict.
+- Network-across-transaction limitation (recorded, not silently left): begin_sync lookup and health.resume_provider probe still perform network calls inside DB transactions, because restructuring to snapshot-network-revalidate would rewrite the fenced claim/blocked/unresolved flow and the intent-commit-before-create guarantee. The adapter enforces a hard monotonic total deadline (thread-abort at deadline + 0.3s grace, pinned by test_crm_deadline.py) inside those calls, bounding the transaction hold. Revisit in P1b with the persistent worker.
+- No complete external wire contract exists in this repo; docs/crm-http-contract.md is a minimal local contract between the adapter and provider-sim, not provider conformance. No real CRM is called.

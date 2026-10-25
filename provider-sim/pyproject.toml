@@ -1,0 +1,6 @@
+[project]
+name = "provider-sim"
+version = "0.1.0"
+description = "Independent local CRM provider simulator (test only, stdlib HTTP)"
+requires-python = ">=3.12"
+dependencies = []

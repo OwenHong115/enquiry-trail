@@ -2,9 +2,8 @@
 
 run_once is the single-step primitive the tests drive; run_until_idle
 loops it with a fresh session per job; main is the console-script
-entrypoint. There is no HTTP CRM adapter in this build (S9), so main
-fails fast instead of starting a worker that would silently skip
-sync_contact jobs.
+entrypoint. main resolves the HTTP CRM adapter via _resolve_crm
+and runs run_until_idle once; it is not a persistent loop (PR 3).
 """
 
 from __future__ import annotations
@@ -101,28 +100,37 @@ def run_until_idle(
     return handled
 
 
-def _resolve_crm() -> CrmPort:
-    """Resolve the production CRM port.
+def _resolve_crm(settings: Settings | None = None) -> CrmPort:
+    """Resolve the CRM port from settings; never a test fake.
 
-    No HTTP CRM adapter exists in this build (it arrives in S9),
-    and a fake must never stand in for it in production code.
+    http: explicit CRM_BASE_URL/CRM_TOKEN (Settings already refuses
+    http mode without them). mock: the local provider simulator at
+    CRM_BASE_URL or its default loopback address. Both return the
+    real HTTP adapter.
     """
-    raise RuntimeError(
-        "no CRM adapter is available in this build: the HTTP CRM "
-        "adapter is not built yet (S9), so the worker cannot start "
-        "without silently skipping sync_contact jobs"
+    from app.adapters.crm_http import HttpCrmAdapter
+
+    settings = settings or Settings.from_env()
+    if settings.crm_mode == "http":
+        return HttpCrmAdapter(settings.crm_base_url, settings.crm_token)
+    return HttpCrmAdapter(
+        settings.crm_base_url or "http://127.0.0.1:8091",
+        settings.crm_token or "sim-token",
     )
 
 
 def main() -> None:
-    """Console-script entrypoint: fail fast until a CRM adapter exists."""
+    """Console-script entrypoint: one run_until_idle pass."""
     configure_logging()
     settings = Settings.from_env()
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
-    crm = _resolve_crm()
-    # Unreachable until _resolve_crm can return a real adapter; the
-    # wiring below is the loop main will run once one exists.
-    run_until_idle(  # pragma: no cover
-        session_factory, uuid.uuid4(), SystemBusinessClock(), crm
-    )
+    crm = _resolve_crm(settings)
+    try:
+        run_until_idle(
+            session_factory, uuid.uuid4(), SystemBusinessClock(), crm
+        )
+    finally:
+        close = getattr(crm, "close", None)
+        if close is not None:
+            close()
