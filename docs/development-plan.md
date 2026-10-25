@@ -43,3 +43,23 @@ Still missing after P1a: P1b persistent worker/Compose and all of
 P2-P7. Local P1a evidence: 55 unit + 143 integration green (includes 13 real-HTTP tests plus trickle-deadline unit tests); simulator
 create counts prove one write/attempt. No real CRM is called; no
 acceptance item is signed off in code (operator-kept record).
+
+## P1b-2 verification (2026-10-26, local only, not CI)
+
+- Suites at the P1b-2 revision: 57 unit + 155 integration green on
+  real PostgreSQL (one known Starlette/httpx warning); 0 leftover
+  leadops_test_% databases and 0 test connections. `uv lock --check`
+  passes after adding uvicorn via `uv lock` (cache redirected into
+  the project venv); CI's `uv sync --locked` was not run locally.
+- Docker Compose (isolated project p1b2verify, clean volume, then
+  removed; the normal db service was restored afterwards):
+  `docker compose config` OK; migrate+seed exited successfully;
+  api/provider-sim/db healthy; login 200 -> submit 202 -> detail
+  ready/synced (remote_id sim-*); worker logs show the simulator
+  reached at provider-sim:8091 (GET 404 then POST 201). Worker
+  restarted, new work after idle processed, and an armed one-shot
+  lookup 500 produced waiting_retry then attempt 2 succeeded.
+  Provider-sim is expose-only (never published); the API is bound
+  to 127.0.0.1:8080 only.
+- The throwaway cross-process scripts used for this evidence are
+  intentionally not committed; this record is their result.
