@@ -41,13 +41,25 @@ no database and imports no application code.
 ## Timeouts and no-retry policy
 
 Explicit httpx timeouts: connect 3s, read 5s, write 5s, pool 3s, each
-capped by the remaining `CallContext.deadline_seconds` (15s) measured
-on a monotonic clock from call start — a total deadline, not only a
-per-read timeout. The adapter makes exactly one HTTP request per port
-call (plus the single read on a definite create-409) and uses no
-retrying transport. The durable job owns retries and budgets.
-Simulator counters (`GET /__test__/counts`) prove one write per attempt
-in `test_crm_http.py`.
+capped by the remaining `CallContext.deadline_seconds` (15s). That
+deadline is hard and total: each call runs under a monotonic deadline
+covering connect, headers and body (including a trickled body). At
+expiry the in-flight adapter-owned client is closed, interrupting the
+socket read, and the expected `ProviderError` (`result_unknown` for
+writes, `unavailable` for reads) is raised within deadline + 0.3s
+abort grace (tests assert deadline + 0.5s). A post-response elapsed
+check is not the mechanism. The create-409 readback spends only the
+original call's remaining budget, never a fresh deadline.
+`test_crm_deadline.py` pins this against a local trickle server that
+sends 8-byte chunks every 0.4s. The adapter makes exactly one HTTP
+request per port call (plus the single read on a definite create-409)
+and uses no retrying transport. Adapter-owned clients are per-request
+and closed deterministically (`close()` / context manager). The
+durable job owns retries and budgets. Simulator counters
+(`GET /__test__/counts`) prove one write per attempt in
+`test_crm_http.py`; `disconnect_after_commit` now closes the
+connection without a response (a real reset, exercising the
+RemoteProtocolError path), distinct from `timeout_after_commit`.
 
 ## Simulator
 

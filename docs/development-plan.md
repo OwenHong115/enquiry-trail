@@ -40,7 +40,6 @@ and handover. UI is P4 and intake security is P3, never P2.
    connected verification and handover.
 
 Still missing after P1a: P1b persistent worker/Compose and all of
-P2-P7. Local P1a evidence: 49 unit + 142 integration green before the
-deadline/robustness fixes (includes 12 real-HTTP tests); simulator
+P2-P7. Local P1a evidence: 55 unit + 143 integration green (includes 13 real-HTTP tests plus trickle-deadline unit tests); simulator
 create counts prove one write/attempt. No real CRM is called; no
 acceptance item is signed off in code (operator-kept record).
