@@ -289,6 +289,62 @@ def test_tasks_list_shape_filters_and_cursor(
     assert _list(api_client, "/api/v1/tasks?limit=101").status_code == 422
 
 
+def test_enquiries_q_matches_public_display_number(
+    api_client: TestClient, postgres_db: str
+) -> None:
+    target = _submit(api_client)
+    _submit(api_client, email="other@example.com",
+           message="Another enquiry that must not match the q filters.")
+    detail = api_client.get(f"/api/v1/enquiries/{target['enquiry_id']}").json()
+    display_no = detail["display_no"]
+    assert display_no == "ENQ-000001"
+    for query in (display_no, "ENQ-1", "0001"):
+        body = _list(api_client, f"/api/v1/enquiries?q={query}").json()
+        assert [i["id"] for i in body["items"]] == [target["enquiry_id"]], query
+    by_email = _list(api_client, "/api/v1/enquiries?q=alex.demo").json()
+    assert [i["id"] for i in by_email["items"]] == [target["enquiry_id"]]
+    by_name = _list(api_client, "/api/v1/enquiries?q=alex").json()
+    assert target["enquiry_id"] in [i["id"] for i in by_name["items"]]
+    unknown = _list(api_client, "/api/v1/enquiries?q=ENQ-9999").json()
+    assert unknown["items"] == []
+    assert unknown["next_cursor"] is None
+
+
+def test_list_detail_consistency_review_required(
+    api_client: TestClient, postgres_db: str
+) -> None:
+    receipt = _submit(api_client, postcode=None)
+    detail = api_client.get(f"/api/v1/enquiries/{receipt['enquiry_id']}").json()
+    assert detail["requires_review"] is True
+    assert detail["attention"] == "review_required"
+    items = _list(
+        api_client, "/api/v1/enquiries?attention=review_required"
+    ).json()["items"]
+    assert [i["id"] for i in items] == [receipt["enquiry_id"]]
+    assert items[0]["processing_summary"] == detail["processing_summary"]
+    assert items[0]["crm_status"] == detail["crm"]["status"]
+
+
+def test_list_detail_consistency_provider_blocked(
+    api_client: TestClient, postgres_db: str
+) -> None:
+    receipt = _submit(api_client)
+    _sql(
+        postgres_db,
+        "INSERT INTO leadops.integration_health (provider, status, updated_at) "
+        "VALUES ('hubspot', 'blocked', now())",
+    )
+    detail = api_client.get(f"/api/v1/enquiries/{receipt['enquiry_id']}").json()
+    assert detail["attention"] == "integration_blocked"
+    items = _list(
+        api_client, "/api/v1/enquiries?attention=integration_blocked"
+    ).json()["items"]
+    assert [i["id"] for i in items] == [receipt["enquiry_id"]]
+    assert items[0]["processing_summary"] == detail["processing_summary"]
+    assert items[0]["attention"] == detail["attention"]
+    assert items[0]["crm_status"] == detail["crm"]["status"]
+
+
 def test_tasks_overdue_filter(api_client: TestClient, postgres_db: str) -> None:
     receipt = _submit(api_client)
     _sql(postgres_db,
