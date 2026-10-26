@@ -100,6 +100,35 @@ shapes are strict subsets of the existing detail/task public fields:
   contact, enquiry, task and health rows), then the event advisory
   lock, taken inside the event insert functions themselves.
 
+## P2 integration status, resume, worker health (local decisions)
+
+- Seed: `seed()` idempotently inserts integration_health rows for the known
+  providers (hubspot=ok, slack=disabled, ai=disabled) with
+  ON CONFLICT (provider) DO NOTHING, so an existing blocked/ok row is never
+  reset and `seed()`'s return shape is unchanged. Existing databases need
+  `python -m app.seed` once (Compose's migrate service already runs it).
+- `GET /api/v1/integrations` returns the existing rows sorted by provider as
+  `{"items": [...]}` with no pagination; an unseeded database returns items
+  only for rows that exist. The API resolves the CRM port once in the
+  composition root via the worker's resolver (`app.state.crm`);
+  tests may substitute a fake there.
+- `POST /api/v1/integrations/{provider}/resume` (session + CSRF): unknown
+  provider -> 404; provider row absent -> 404; expected_status must be
+  "blocked" (body errors are 422). Under the row lock: not blocked -> 409
+  `invalid_state`, stale expected_updated_at -> 409 `version_conflict`,
+  failed probe -> 409 `resume_failed` (chosen code; a failed probe changes
+  nothing - no status change, no requeue, no event). On success one
+  transaction sets ok (blocked_at/last_error_code cleared, last_success_at
+  set), requeues blocked sync jobs in a new cycle due now, emits exactly
+  one integration.resumed, and returns the integration item.
+- F10 limitation: the provider probe runs inside the row-locked resume
+  transaction, bounded by the 15s adapter deadline; the row lock is held
+  for the probe's duration in this slice.
+- `GET /api/v1/health/workers` returns `{"workers": [...],
+  "stale_after_seconds": N}` with no queue metrics. A worker is stale when
+  its last_seen_at is older than max(3 x WORKER_HEARTBEAT_SECONDS, 15s),
+  compared against the database clock, not a Python wall clock.
+
 ## Delivery boundaries (not implemented features)
 
 - Adapter and simulator exist (P1a); no persistent worker loop,
