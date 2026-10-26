@@ -10,9 +10,17 @@ name and test database prefix — stay `leadops` to match the contract package.
 ## Quick start
 
 Prerequisites: Docker Desktop running, Python 3.12, and a `.env` file.
+Set `SESSION_SECRET` to a private random value and `SEED_OPERATOR_PASSWORD`
+to a demo operator password of your choosing in `.env`; there is no default
+operator password. The `migrate` service runs `alembic upgrade head` and the
+seed before `api` and `worker` start.
 
-    docker compose up -d db          # PostgreSQL 16 on 127.0.0.1:55432
-    cp .env.example .env             # DATABASE_URL and the local secrets
+    cp .env.example .env             # then set SESSION_SECRET and SEED_OPERATOR_PASSWORD in .env
+    docker compose up -d --build     # db, provider-sim, migrate (migrate + seed), api, worker
+    # open the API at http://127.0.0.1:8080 (health: /api/v1/health/live)
+
+For tests only, `docker compose up -d db` (PostgreSQL 16 on 127.0.0.1:55432) is enough:
+
     cd backend
     .venv\Scripts\python.exe -m pytest tests/unit -q
     .venv\Scripts\python.exe -m pytest tests/integration -q
