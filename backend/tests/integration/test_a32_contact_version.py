@@ -334,7 +334,7 @@ def test_a32_mid_sync_version_change_picked_up_without_duplicate_create(
     assert _detail(api_client, second.enquiry_id)["processing_summary"] == "ready"
 
 
-def test_a32_content_duplicate_still_updates_contact_and_rearms(
+def test_a32_changed_contact_data_is_new_enquiry_and_patches_remote(
     api_client: TestClient, postgres_db: str
 ) -> None:
     clock = FakeClock(T0)
@@ -343,32 +343,46 @@ def test_a32_content_duplicate_still_updates_contact_and_rearms(
     _run_next(postgres_db, clock, fake, "prepare_enquiry")
     _run_next(postgres_db, clock, fake, "sync_contact")
     assert _sync_job(postgres_db).state == "succeeded"
+    assert _detail(api_client, first.enquiry_id)["processing_summary"] == "ready"
 
-    # Same enquiry content within 600s, but new valid contact data:
-    # the enquiry deduplicates, the contact data must not be dropped.
+    # Same email/message within 600s, but new valid name/phone:
+    # strict canonical dedup (fingerprint unchanged) makes this a
+    # NEW enquiry, not a content duplicate.
     clock.advance_by(300)
-    duplicate = _submit(
+    second = _submit(
         postgres_db,
         _payload(first_name="Alicia", last_name="Morgans",
                  phone="+61487654321"),
         clock,
     )
-    assert duplicate.enquiry_id == first.enquiry_id
-    assert duplicate.deduplication == "content_duplicate"
+    assert second.enquiry_id != first.enquiry_id
+    assert second.deduplication == "new"
     enquiries = _fetch(postgres_db, "SELECT count(*) AS n FROM leadops.enquiries")
-    assert enquiries[0].n == 1
+    assert enquiries[0].n == 2
     contact = _contact(postgres_db)
     assert contact.first_name == "Alicia"
     assert contact.last_name == "Morgans"
     assert contact.phone_e164 == "+61487654321"
     assert contact.version == 2
+    second_req = _fetch(
+        postgres_db,
+        "SELECT required_contact_version FROM leadops.enquiries WHERE id = :id",
+        {"id": second.enquiry_id},
+    )[0]
+    assert second_req.required_contact_version == 2
+
+    _run_next(postgres_db, clock, fake, "prepare_enquiry")
+    # The stable job is rearmed for v2; the old enquiry stays ready.
     assert _sync_job(postgres_db).state == "pending"
+    assert _detail(api_client, first.enquiry_id)["processing_summary"] == "ready"
+    assert _detail(api_client, second.enquiry_id)["processing_summary"] != "ready"
 
     _run_next(postgres_db, clock, fake, "sync_contact")
     assert len(fake.calls_of("create_contact")) == 1
     _assert_remote_v2(fake)
     assert _link(postgres_db, contact.id).synced_contact_version == 2
     assert _detail(api_client, first.enquiry_id)["processing_summary"] == "ready"
+    assert _detail(api_client, second.enquiry_id)["processing_summary"] == "ready"
 
 
 def test_a32_unsupported_patch_does_not_advance_link(
