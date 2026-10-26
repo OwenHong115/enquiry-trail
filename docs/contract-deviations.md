@@ -154,8 +154,11 @@ shapes are strict subsets of the existing detail/task public fields:
   protection. Safe methods are not gated and no CORS middleware or
   headers are added. ALLOWED_ORIGINS entries are exact
   scheme://host[:port] origins (no path, wildcard or trailing slash),
-  validated at startup; when unset, the single allowed origin is derived
-  from APP_BASE_URL.
+  validated at startup; when ALLOWED_ORIGINS is unset or exactly empty,
+  the single allowed origin is derived from APP_BASE_URL using
+  scheme/host/port only - an APP_BASE_URL path or trailing slash is
+  ignored for derivation, never a startup-time failure (a non-empty
+  ALLOWED_ORIGINS value containing no entries is still an error).
 - Body bound: MAX_REQUEST_BYTES (default 65536, positive) applies to
   every request. An oversized Content-Length is rejected 413
   `payload_too_large` before the app runs; otherwise the middleware

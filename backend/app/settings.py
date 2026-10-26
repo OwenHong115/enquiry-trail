@@ -104,10 +104,20 @@ class Settings:
             raise ValueError(f"invalid trusted proxy: {raw!r}") from err
 
     def resolved_allowed_origins(self) -> tuple[str, ...]:
-        """Configured origins, or the one derived from APP_BASE_URL."""
+        """Configured origins, or the one derived from APP_BASE_URL.
+
+        Derivation uses scheme/host/port only: an APP_BASE_URL
+        path or trailing slash is deployment decoration and is
+        ignored here, never a startup-time surprise. Explicit
+        ALLOWED_ORIGINS entries remain strict exact origins.
+        """
         if self.allowed_origins:
             return tuple(_parse_origin(o) for o in self.allowed_origins)
-        return (_parse_origin(self.app_base_url),)
+        base = urlparse(self.app_base_url)
+        origin = f"{base.scheme}://{base.hostname.lower()}"
+        if base.port is not None:
+            origin = f"{origin}:{base.port}"
+        return (origin,)
 
     def trusted_proxy_networks(self) -> tuple:
         return tuple(self._parse_proxy(p) for p in self.trusted_proxies)
@@ -118,7 +128,14 @@ class Settings:
         if not database_url:
             raise RuntimeError("DATABASE_URL is not set")
         allowed_raw = os.environ.get("ALLOWED_ORIGINS")
-        if allowed_raw is not None and not _split_csv(allowed_raw):
+        # Unset or exactly empty (after strip) derives from
+        # APP_BASE_URL; a non-empty value that yields no entries
+        # (whitespace/commas only) is a configuration error.
+        if (
+            allowed_raw is not None
+            and allowed_raw.strip() != ""
+            and not _split_csv(allowed_raw)
+        ):
             raise ValueError("ALLOWED_ORIGINS must not be an empty list")
         try:
             max_bytes = int(os.environ.get("MAX_REQUEST_BYTES", "65536"))

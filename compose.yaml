@@ -55,6 +55,9 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
       SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
       APP_BASE_URL: http://127.0.0.1:8080
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-65536}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       CRM_MODE: ${CRM_MODE:-mock}
       CRM_BASE_URL: ${CRM_BASE_URL:-http://provider-sim:8091}
       CRM_TOKEN: ${CRM_TOKEN:-sim-token}
