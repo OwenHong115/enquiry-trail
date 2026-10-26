@@ -10,9 +10,17 @@ name and test database prefix — stay `leadops` to match the contract package.
 ## Quick start
 
 Prerequisites: Docker Desktop running, Python 3.12, and a `.env` file.
+Set `SESSION_SECRET` to a private random value and `SEED_OPERATOR_PASSWORD`
+to a demo operator password of your choosing in `.env`; there is no default
+operator password. The `migrate` service runs `alembic upgrade head` and the
+seed before `api` and `worker` start.
 
-    docker compose up -d db          # PostgreSQL 16 on 127.0.0.1:55432
-    cp .env.example .env             # DATABASE_URL and the local secrets
+    cp .env.example .env             # then set SESSION_SECRET and SEED_OPERATOR_PASSWORD in .env
+    docker compose up -d --build     # db, provider-sim, migrate (migrate + seed), api, worker
+    # open the API at http://127.0.0.1:8080 (health: /api/v1/health/live)
+
+For tests only, `docker compose up -d db` (PostgreSQL 16 on 127.0.0.1:55432) is enough:
+
     cd backend
     .venv\Scripts\python.exe -m pytest tests/unit -q
     .venv\Scripts\python.exe -m pytest tests/integration -q
@@ -108,7 +116,7 @@ P1a (this branch) delivers the HTTP CRM adapter and provider simulator. Still mi
 | S8 extraction and fault injection | planned (P5 AI extraction; fault demonstration P6) |
 | P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | locally complete on fix/p0-closeout; merge/CI gate in docs/closeout-review.md |
 | P1a HTTP CRM adapter + provider simulator | implemented on feat/crm-http-adapter (stacked on P0 until P0 merges); PR 2 |
-| P1b persistent worker, heartbeat, seed, Compose | planned (P1b, PR 3) |
+| P1b persistent worker, heartbeat, seed, Compose | worker runtime, seed, API entrypoint, Dockerfiles and Compose implemented on feat/p1b-persistent-worker (P1b-1/P1b-2, locally verified; see docs/development-plan.md) |
 | P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | planned (P2) |
 | S9 UI, delivery | UI planned (P4); connected verification/handover P7; still missing |
 

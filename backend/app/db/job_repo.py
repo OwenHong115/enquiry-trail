@@ -532,3 +532,33 @@ def close_attempt(
         )
     )
     return result.rowcount
+
+
+def renew_lease(session: Session, job_id: uuid.UUID, lease_token: uuid.UUID,
+                lease_seconds: int = 60) -> int:
+    """Extend a running job's lease under its fence (DB clock)."""
+    result = session.execute(
+        update(tables.jobs)
+        .where(
+            tables.jobs.c.id == job_id,
+            tables.jobs.c.lease_token == lease_token,
+            tables.jobs.c.state == "running",
+        )
+        .values(
+            heartbeat_at=text("clock_timestamp()"),
+            lease_until=text(
+                f"clock_timestamp() + interval '{int(lease_seconds)} seconds'"
+            ),
+        )
+    )
+    return result.rowcount
+
+
+def earliest_next_attempt_at(session: Session):
+    """Earliest due instant among claimable-state jobs, or None."""
+    return session.execute(
+        select(tables.jobs.c.next_attempt_at)
+        .where(tables.jobs.c.state.in_(("pending", "waiting_retry", "reconciling")))
+        .order_by(tables.jobs.c.next_attempt_at)
+        .limit(1)
+    ).scalar_one_or_none()

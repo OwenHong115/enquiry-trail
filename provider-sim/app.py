@@ -246,7 +246,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     port = int(os.environ.get("PORT", "8091"))
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    # Local runs stay loopback-only; Compose sets SIM_HOST=0.0.0.0 so
+    # the worker container can reach this (still unpublished) service.
+    host = os.environ.get("SIM_HOST", "127.0.0.1")
+    ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

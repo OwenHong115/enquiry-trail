@@ -208,3 +208,12 @@ activity_events = Table(
     Column("actor_id", Uuid),
     Column("details_json", JSONB, nullable=False),
 )
+
+worker_heartbeats = Table(
+    "worker_heartbeats",
+    metadata,
+    Column("worker_id", Uuid, primary_key=True),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    Column("active_job_count", Integer, nullable=False),
+)

@@ -39,7 +39,7 @@ class _TrickleHandler(BaseHTTPRequestHandler):
             try:
                 self.wfile.write(BODY[i:i + chunk])
                 self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 return
             time.sleep(0.4)
 

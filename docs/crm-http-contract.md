@@ -95,8 +95,8 @@ cd backend
 
 ## Known gaps
 
-- No persistent worker loop, heartbeat, seed data or Compose service
-  for the simulator/worker (PR 3).
+- Persistent worker loop and heartbeats land in P1b-1; seed data
+  and Compose remain P1b-2.
 - `begin_sync`'s lookup and `resume_provider`'s probe still run inside
   a DB transaction; see `docs/contract-deviations.md`. The adapter's
   total deadline bounds the network wait inside that transaction.

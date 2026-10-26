@@ -17,5 +17,74 @@ services:
       timeout: 3s
       retries: 15
 
+  provider-sim:
+    build: ./provider-sim
+    restart: unless-stopped
+    environment:
+      SIM_TOKEN: ${CRM_TOKEN:-sim-token}
+      SIM_HOST: "0.0.0.0"
+      PORT: "8091"
+    # Simulator (with local-only fault injection) is never published;
+    # it is reachable only on the compose network.
+    expose:
+      - "8091"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/__test__/counts')"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  migrate:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
+      SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
+      SEED_OPERATOR_USERNAME: ${SEED_OPERATOR_USERNAME:-demo-operator}
+      SEED_OPERATOR_PASSWORD: ${SEED_OPERATOR_PASSWORD:?set SEED_OPERATOR_PASSWORD to a demo operator password in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Explicit migration then seed; the API never migrates on start.
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed"]
+    restart: "no"
+
+  api:
+    restart: unless-stopped
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
+      SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
+      APP_BASE_URL: http://127.0.0.1:8080
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      # Loopback only; no public exposure in this slice.
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health/live')"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  worker:
+    restart: unless-stopped
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
+      SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
+      CRM_MODE: mock
+      CRM_BASE_URL: http://provider-sim:8091
+      CRM_TOKEN: ${CRM_TOKEN:-sim-token}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      provider-sim:
+        condition: service_healthy
+    command: ["leadops-worker"]
+    # The worker has no HTTP surface; its health is its heartbeat row,
+    # so no compose healthcheck is faked here.
+
 volumes:
   leadops_db_data:

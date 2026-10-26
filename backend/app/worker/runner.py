@@ -1,19 +1,28 @@
-"""Worker entrypoint: claim and handle jobs one at a time.
+"""Worker entrypoint: claim and handle jobs, persistently.
 
 run_once is the single-step primitive the tests drive; run_until_idle
-loops it with a fresh session per job; main is the console-script
-entrypoint. main resolves the HTTP CRM adapter via _resolve_crm
-and runs run_until_idle once; it is not a persistent loop (PR 3).
+loops it until the queue drains (kept for tests); run_forever is the
+persistent runtime main() runs: bounded-concurrency slots with
+independent sessions, worker and per-job heartbeats with lease
+renewal, idle sleep until the earliest future job, bounded error
+backoff, and graceful shutdown on SIGINT/SIGTERM or a stop event.
+A slot never dies on a DB error: the whole iteration is isolated,
+logged (worker.slot_error) and retried with bounded backoff.
 """
 
 from __future__ import annotations
 
+import signal
+import sys
+import threading
+import time
 import uuid
 from collections.abc import Callable
+from datetime import timezone
 
 from sqlalchemy.orm import Session
 
-from app.db import job_repo
+from app.db import job_repo, worker_repo
 from app.db.session import make_engine, make_session_factory
 from app.logging import configure_logging, log_event
 from app.ports.clock import BusinessClock
@@ -23,6 +32,44 @@ from app.services.clock import SystemBusinessClock
 from app.settings import Settings
 from app.worker.claiming import claim_next, handle_claim
 
+_LEASE_SECONDS = 60
+
+
+class WorkerUncleanShutdown(RuntimeError):
+    """Slots died unexpectedly or outlived the shutdown timeout."""
+
+    def __init__(self, handled: int) -> None:
+        super().__init__("worker shutdown was not clean")
+        self.handled = handled
+
+
+def _renew_loop(bind, claim, interval: float, stop: threading.Event) -> None:
+    """Renew one job's lease (DB clock) until told to stop or fenced out.
+
+    Transient DB errors are logged (job.heartbeat_error) and retried on
+    the next tick; only a real fence loss (zero rows renewed) stops it.
+    """
+    while not stop.wait(interval):
+        session = Session(bind=bind)
+        try:
+            with session.begin():
+                renewed = job_repo.renew_lease(
+                    session, claim.job_id, claim.lease_token, _LEASE_SECONDS
+                )
+            if renewed == 0:
+                log_event("job.heartbeat_fence_lost", job_id=str(claim.job_id),
+                          attempt_no=claim.attempt_no)
+                return
+        except Exception as err:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            log_event("job.heartbeat_error", job_id=str(claim.job_id),
+                      attempt_no=claim.attempt_no, error_code=type(err).__name__)
+        finally:
+            session.close()
+
 
 def run_once(
     session: Session,
@@ -30,23 +77,34 @@ def run_once(
     clock: BusinessClock,
     crm: CrmPort,
     scheduler: Scheduler | None = None,
+    heartbeat_interval_seconds: float = 5.0,
+    claim_observer: Callable[[bool], None] | None = None,
 ) -> bool:
-    """Claim and handle at most one due job.
+    """Claim and handle at most one due job (True when one was handled).
 
-    Returns True when a job was handled and False when nothing
-    was due.
+    claim_observer(True/False) brackets actual claimed execution so
+    callers can count active jobs, not claim attempts. Known follow-up:
+    an unhandled (non-provider) exception from handle_claim is logged
+    as job.error but the job stays running until lease expiry; it is
+    not rescheduled here because finalization state is uncertain.
     """
     claim = claim_next(session, worker_id, clock)
     if claim is None:
         return False
+    if claim_observer is not None:
+        claim_observer(True)
+    stop_heartbeat = threading.Event()
+    heartbeat_thread = None
+    if heartbeat_interval_seconds and heartbeat_interval_seconds > 0:
+        heartbeat_thread = threading.Thread(
+            target=_renew_loop,
+            args=(session.get_bind(), claim, heartbeat_interval_seconds, stop_heartbeat),
+            daemon=True, name="job-heartbeat",
+        )
+        heartbeat_thread.start()
     try:
         handle_claim(session, claim, clock, crm=crm, scheduler=scheduler)
     except Exception as err:
-        # Job-level isolation lives here, not in run_until_idle:
-        # the claim is the only place job_id and attempt_no are
-        # known. Identifier only: no message, payload or contact
-        # data. The job was claimed and attempted, so return True
-        # and let the loop continue; no job.handled is emitted.
         session.rollback()
         log_event(
             "job.error",
@@ -57,10 +115,12 @@ def run_once(
             ),
         )
         return True
-    # Identifiers and outcome only: no contact or CRM field values.
-    # The read opens a transaction on the caller's session, so roll
-    # it back: the next claim_next on this session must find no
-    # transaction already begun.
+    finally:
+        stop_heartbeat.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=heartbeat_interval_seconds + 2)
+        if claim_observer is not None:
+            claim_observer(False)
     outcome = job_repo.get_job_state(session, claim.job_id)
     session.rollback()
     log_event(
@@ -80,19 +140,15 @@ def run_until_idle(
     crm: CrmPort,
     scheduler: Scheduler | None = None,
     max_iterations: int | None = None,
+    heartbeat_interval_seconds: float = 5.0,
 ) -> int:
-    """Run jobs until none is due; return how many were handled.
-
-    One fresh session per iteration, so a failed job cannot poison
-    the next claim. The loop stops when the queue is idle, and
-    max_iterations bounds it when given: it is never an unbounded
-    loop.
-    """
+    """Run jobs until none is due; return how many were handled."""
     handled = 0
     while max_iterations is None or handled < max_iterations:
         session = session_factory()
         try:
-            if not run_once(session, worker_id, clock, crm, scheduler):
+            if not run_once(session, worker_id, clock, crm, scheduler,
+                            heartbeat_interval_seconds=heartbeat_interval_seconds):
                 break
         finally:
             session.close()
@@ -100,14 +156,169 @@ def run_until_idle(
     return handled
 
 
-def _resolve_crm(settings: Settings | None = None) -> CrmPort:
-    """Resolve the CRM port from settings; never a test fake.
+def _upsert_worker_heartbeat(session_factory, worker_id, active: int) -> None:
+    session = session_factory()
+    try:
+        with session.begin():
+            worker_repo.upsert_heartbeat(session, worker_id, active)
+    finally:
+        session.close()
 
-    http: explicit CRM_BASE_URL/CRM_TOKEN (Settings already refuses
-    http mode without them). mock: the local provider simulator at
-    CRM_BASE_URL or its default loopback address. Both return the
-    real HTTP adapter.
+
+def _idle_sleep_seconds(session_factory, clock, idle_poll_seconds: float) -> float:
+    session = session_factory()
+    try:
+        earliest = job_repo.earliest_next_attempt_at(session)
+        session.rollback()
+    finally:
+        session.close()
+    if earliest is None:
+        return idle_poll_seconds
+    if earliest.tzinfo is None:
+        earliest = earliest.replace(tzinfo=timezone.utc)
+    until_due = (earliest - clock.now_utc()).total_seconds()
+    if until_due <= 0:
+        return 0.05
+    return min(idle_poll_seconds, until_due)
+
+
+def run_forever(
+    session_factory: Callable[[], Session],
+    worker_id: uuid.UUID,
+    clock: BusinessClock,
+    crm: CrmPort,
+    scheduler: Scheduler | None = None,
+    *,
+    concurrency: int = 2,
+    idle_poll_seconds: float = 1.0,
+    heartbeat_seconds: float = 5.0,
+    shutdown_timeout_seconds: float = 30.0,
+    error_backoff_seconds: float = 1.0,
+    stop_event: threading.Event | None = None,
+    heartbeat_interval_seconds: float | None = None,
+) -> int:
+    """Run persistently until stop_event is set; return jobs handled.
+
+    Raises WorkerUncleanShutdown (carrying the handled count) when
+    slots die unexpectedly or outlive the shutdown timeout; in that
+    case the caller's stop_event is not set by us and worker.stopped
+    is logged with clean=False.
     """
+    if concurrency < 1:
+        raise ValueError("worker concurrency must be at least 1")
+    stop = stop_event or threading.Event()
+    internal_stop = threading.Event()
+    job_heartbeat = heartbeat_interval_seconds
+    if job_heartbeat is None:
+        job_heartbeat = heartbeat_seconds
+    lock = threading.Lock()
+    active = [0]
+    handled = [0]
+
+    def stopping() -> bool:
+        return stop.is_set() or internal_stop.is_set()
+
+    def heartbeat_loop() -> None:
+        try:
+            _upsert_worker_heartbeat(session_factory, worker_id, 0)
+        except Exception as err:
+            log_event("worker.heartbeat_error", worker_id=str(worker_id),
+                      error_code=type(err).__name__)
+        while not stopping():
+            if stop.wait(heartbeat_seconds):
+                break
+            if internal_stop.is_set():
+                break
+            with lock:
+                current = active[0]
+            try:
+                _upsert_worker_heartbeat(session_factory, worker_id, current)
+            except Exception as err:
+                log_event("worker.heartbeat_error", worker_id=str(worker_id),
+                          error_code=type(err).__name__)
+
+    def _set_active(claimed: bool) -> None:
+        with lock:
+            active[0] += 1 if claimed else -1
+
+    def slot() -> None:
+        consecutive_errors = 0
+        while not stopping():
+            session: Session | None = None
+            delay = idle_poll_seconds
+            try:
+                session = session_factory()
+                did = run_once(session, worker_id, clock, crm, scheduler,
+                               heartbeat_interval_seconds=job_heartbeat,
+                               claim_observer=_set_active)
+                if did:
+                    with lock:
+                        handled[0] += 1
+                    consecutive_errors = 0
+                    continue
+                delay = _idle_sleep_seconds(session_factory, clock, idle_poll_seconds)
+            except Exception as err:
+                log_event("worker.slot_error", worker_id=str(worker_id),
+                          error_code=type(err).__name__)
+                delay = min(error_backoff_seconds * (2 ** consecutive_errors), 30.0)
+                consecutive_errors += 1
+            finally:
+                if session is not None:
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
+            deadline = time.monotonic() + delay
+            while not stopping() and time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                if stop.wait(min(0.1, max(0.0, remaining))):
+                    break
+
+    heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True, name="worker-heartbeat")
+    heartbeat_thread.start()
+    slots = [
+        threading.Thread(target=slot, daemon=True, name=f"worker-slot-{i}")
+        for i in range(concurrency)
+    ]
+    for thread in slots:
+        thread.start()
+    log_event("worker.started", worker_id=str(worker_id), concurrency=concurrency)
+    requested = False
+    clean = False
+    try:
+        stop_deadline: float | None = None
+        while any(thread.is_alive() for thread in slots):
+            for thread in slots:
+                thread.join(timeout=0.1)
+            if stop.is_set():
+                requested = True
+                if stop_deadline is None:
+                    stop_deadline = time.monotonic() + shutdown_timeout_seconds
+                if time.monotonic() >= stop_deadline:
+                    break
+    finally:
+        internal_stop.set()
+        heartbeat_thread.join(timeout=heartbeat_seconds + 2)
+        alive = any(thread.is_alive() for thread in slots)
+        if alive:
+            log_event("worker.shutdown_timeout", worker_id=str(worker_id))
+        elif not requested and not stop.is_set():
+            log_event("worker.slot_died", worker_id=str(worker_id))
+        else:
+            try:
+                _upsert_worker_heartbeat(session_factory, worker_id, 0)
+            except Exception:
+                pass
+        clean = not alive and (requested or stop.is_set())
+        log_event("worker.stopped", worker_id=str(worker_id),
+                  handled=handled[0], clean=clean)
+    if not clean:
+        raise WorkerUncleanShutdown(handled[0])
+    return handled[0]
+
+
+def _resolve_crm(settings: Settings | None = None) -> CrmPort:
+    """Resolve the CRM port from settings; never a test fake."""
     from app.adapters.crm_http import HttpCrmAdapter
 
     settings = settings or Settings.from_env()
@@ -120,17 +331,49 @@ def _resolve_crm(settings: Settings | None = None) -> CrmPort:
 
 
 def main() -> None:
-    """Console-script entrypoint: one run_until_idle pass."""
+    """Console-script entrypoint: persistent worker until signalled."""
     configure_logging()
     settings = Settings.from_env()
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
     crm = _resolve_crm(settings)
+    stop_event = threading.Event()
+
+    def _signal_handler(signum, frame):  # pragma: no cover - process level
+        stop_event.set()
+
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    signals = [signal.SIGINT, signal.SIGTERM]
+    if sigbreak is not None:
+        signals.append(sigbreak)
+    for sig in signals:
+        try:
+            signal.signal(sig, _signal_handler)
+        except (ValueError, OSError):
+            pass
+    worker_id = uuid.uuid4()
+    clean = True
     try:
-        run_until_idle(
-            session_factory, uuid.uuid4(), SystemBusinessClock(), crm
+        run_forever(
+            session_factory, worker_id, SystemBusinessClock(), crm,
+            concurrency=settings.worker_concurrency,
+            idle_poll_seconds=settings.worker_idle_poll_seconds,
+            heartbeat_seconds=settings.worker_heartbeat_seconds,
+            shutdown_timeout_seconds=settings.worker_shutdown_timeout_seconds,
+            error_backoff_seconds=settings.worker_error_backoff_seconds,
+            stop_event=stop_event,
         )
+    except WorkerUncleanShutdown:
+        # Slots may still be alive: do not close the adapter or
+        # dispose the engine under in-flight work.
+        clean = False
     finally:
-        close = getattr(crm, "close", None)
-        if close is not None:
-            close()
+        if clean:
+            close = getattr(crm, "close", None)
+            if close is not None:
+                close()
+            engine.dispose()
+        log_event("worker.shutdown_complete", worker_id=str(worker_id), clean=clean)
+    if not clean:
+        # Non-zero so a supervisor / Compose restart policy can act.
+        sys.exit(1)
