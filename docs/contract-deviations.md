@@ -53,6 +53,31 @@ signed off here.
 - This records the local decision only; A32 acceptance remains the operator's
   record in docs/acceptance-log.md and is not signed off here.
 
+## P2 enquiry/task lists (local list-shape assumptions)
+
+No complete external list schema exists in this repository, so the list
+shapes are strict subsets of the existing detail/task public fields:
+
+- `GET /api/v1/enquiries` items: id, display_no, received_at (the enquiry's
+  creation instant; the detail exposes no separate created_at), service_type,
+  processing_summary, attention, crm_status (the detail's crm.status,
+  flattened), next_attempt_at exactly when the detail would publish it,
+  owner, and the detail contact summary. Stable order is
+  received_at DESC, id DESC.
+- `GET /api/v1/tasks` items: task id/kind/title/status/due_at/created_at/
+  completed_at/cancelled_at/version, owner, and a minimal enquiry summary
+  (id, display_no, service_type, contact name/email/phone). Order is
+  created_at DESC, id DESC (the task keyset).
+- Both return `{"items": [...], "next_cursor": string|null}` with opaque
+  keyset cursors over (timestamp, id); invalid cursors are 422, never a
+  silent restart. limit defaults to 25, max 100.
+- Status values come from the one shared read-model projection
+  (app/services/read_model.py) used by the detail endpoint; there is no
+  second mapping. Owner is a plain code filter (an unknown code matches
+  nothing); the status/attention vocabularies are validated and unknown
+  values are 422. Tasks add an optional `overdue=true` filter (open and
+  due_at before the business clock).
+
 ## Delivery boundaries (not implemented features)
 
 - Adapter and simulator exist (P1a); no persistent worker loop,
