@@ -112,6 +112,24 @@ def test_settings_from_env_invalid_allowed_origins_raises(
         Settings.from_env()
 
 
+def test_settings_from_env_empty_allowed_origins_derives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", DB)
+    monkeypatch.setenv("SESSION_SECRET", "s")
+    monkeypatch.setenv("APP_BASE_URL", "http://app.example.com:9000")
+    monkeypatch.setenv("ALLOWED_ORIGINS", "")
+    settings = Settings.from_env()
+    assert settings.resolved_allowed_origins() == ("http://app.example.com:9000",)
+
+
+def test_app_base_url_trailing_slash_derives_origin() -> None:
+    settings = _settings(app_base_url="http://127.0.0.1:8080/")
+    assert settings.resolved_allowed_origins() == ("http://127.0.0.1:8080",)
+    settings = _settings(app_base_url="https://example.com/base/")
+    assert settings.resolved_allowed_origins() == ("https://example.com",)
+
+
 def test_proxy_direct_peer_ignores_spoofed_xff() -> None:
     settings = _settings()
     request = _request("203.0.113.9", xff="198.51.100.7")
