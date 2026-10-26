@@ -100,10 +100,54 @@ shapes are strict subsets of the existing detail/task public fields:
   contact, enquiry, task and health rows), then the event advisory
   lock, taken inside the event insert functions themselves.
 
+## P2 integration status, resume, worker health (local decisions)
+
+- Seed: `seed()` idempotently inserts integration_health rows for the known
+  providers (hubspot=ok, slack=disabled, ai=disabled) with
+  ON CONFLICT (provider) DO NOTHING, so an existing blocked/ok row is never
+  reset and `seed()`'s return shape is unchanged. Existing databases need
+  `python -m app.seed` once (Compose's migrate service already runs it).
+- `GET /api/v1/integrations` returns the existing rows sorted by provider as
+  `{"items": [...]}` with no pagination; an unseeded database returns items
+  only for rows that exist. The API resolves the CRM port once in the
+  composition root via the worker's resolver (`app.state.crm`);
+  tests may substitute a fake there.
+- `POST /api/v1/integrations/{provider}/resume` (session + CSRF): unknown
+  provider -> 404; provider row absent -> 404; expected_status must be
+  "blocked" (body errors are 422). Under the row lock: not blocked -> 409
+  `invalid_state`, stale expected_updated_at -> 409 `version_conflict`,
+  failed probe -> 409 `resume_failed` (chosen code; a failed probe changes
+  nothing - no status change, no requeue, no event). On success one
+  transaction sets ok (blocked_at/last_error_code cleared, last_success_at
+  set), requeues blocked sync jobs in a new cycle due now, emits exactly
+  one integration.resumed, and returns the integration item.
+- F10 limitation: the provider probe runs inside the row-locked resume
+  transaction, bounded by the 15s adapter deadline; the row lock is held
+  for the probe's duration in this slice.
+- `GET /api/v1/health/workers` returns `{"workers": [...],
+  "stale_after_seconds": N}` with no queue metrics. A worker is stale when
+  its last_seen_at is older than max(3 x WORKER_HEARTBEAT_SECONDS, 15s),
+  compared against the database clock, not a Python wall clock.
+- Field semantics: `last_success_at` means the last successful probe/resume
+  for the provider (set when a resume succeeds, including the worker's
+  reconcile path); individual CRM sync calls do not move it. `incident_id`
+  is retained when the provider returns to ok: it identifies the most
+  recent incident for traceability, and a later block opens a new one.
+  `expected_status` is checked explicitly against the locked row (the
+  only accepted value is "blocked", so a mismatch is invalid_state).
+- Clean shutdown: a worker that stops cleanly leaves its heartbeat row
+  behind; it therefore reads alive until the stale threshold passes and
+  stale afterwards. No heartbeat row is deleted on shutdown in this slice.
+- The Compose api service carries the same CRM_MODE/CRM_BASE_URL/
+  CRM_TOKEN configuration as the worker and depends on provider-sim
+  healthy, so the API's startup-resolved adapter probes
+  provider-sim:8091 rather than a container-local 127.0.0.1. The
+  provider-sim port remains unpublished.
+
 ## Delivery boundaries (not implemented features)
 
-- Adapter and simulator exist (P1a); no persistent worker loop,
-  heartbeat, seed, or Compose (P1b); no UI (P4); no Origin/body/
+- Adapter and simulator exist (P1a); the persistent worker loop,
+  heartbeat, seed and Compose exist (P1b); no UI (P4); no Origin/body/
   rate-limit/webhook hardening (P3); no connected/live CRM; no
   acceptance signoff.
 - Public deployment hardening (HTTPS cookie policy, origin policy, rate limiting,

@@ -55,9 +55,14 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
       SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
       APP_BASE_URL: http://127.0.0.1:8080
+      CRM_MODE: ${CRM_MODE:-mock}
+      CRM_BASE_URL: ${CRM_BASE_URL:-http://provider-sim:8091}
+      CRM_TOKEN: ${CRM_TOKEN:-sim-token}
     depends_on:
       migrate:
         condition: service_completed_successfully
+      provider-sim:
+        condition: service_healthy
     ports:
       # Loopback only; no public exposure in this slice.
       - "127.0.0.1:8080:8080"

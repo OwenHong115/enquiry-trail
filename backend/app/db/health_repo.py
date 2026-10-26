@@ -22,6 +22,34 @@ def get_health(session: Session, provider: str) -> Any | None:
     ).one_or_none()
 
 
+def list_integrations(session: Session) -> list:
+    """All integration health rows, sorted by provider."""
+    return list(session.execute(
+        select(tables.integration_health)
+        .order_by(tables.integration_health.c.provider)
+    ).all())
+
+
+def get_integration_for_update(session: Session, provider: str):
+    """Full health row under FOR UPDATE, or None when absent."""
+    return session.execute(
+        select(tables.integration_health)
+        .where(tables.integration_health.c.provider == provider)
+        .with_for_update()
+    ).one_or_none()
+
+
+def list_workers(session: Session):
+    """(database now, heartbeat rows) for worker health reads."""
+    db_now = session.execute(text("SELECT clock_timestamp()")).scalar_one()
+    rows = list(session.execute(
+        select(tables.worker_heartbeats).order_by(
+            tables.worker_heartbeats.c.worker_id
+        )
+    ).all())
+    return db_now, rows
+
+
 def insert_health_blocked(
     session: Session, provider: str, incident_id: uuid.UUID
 ) -> None:
@@ -98,6 +126,7 @@ def set_health_ok(session: Session, provider: str) -> None:
         .values(
             status="ok",
             blocked_at=None,
+            last_success_at=text("clock_timestamp()"),
             last_error_code=None,
             updated_at=text("clock_timestamp()"),
         )

@@ -9,7 +9,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import auth, enquiries, health, intake, jobs, reviews, tasks
+from app.api import (
+    auth, enquiries, health, intake, integrations, jobs, reviews, tasks,
+)
 from app.api.errors import ApiError, ErrorEnvelope, envelope_response, error_response
 from app.config.routing import EXPECTED_ROUTING_SHA256, ROUTING_CONFIG
 from app.db.session import make_engine, make_session_factory
@@ -17,6 +19,7 @@ from app.domain.routing import routing_config_hash
 from app.logging import configure_logging, log_event
 from app.services.clock import SystemBusinessClock
 from app.settings import Settings
+from app.worker.runner import _resolve_crm
 
 _HTTP_CODE_MAP = {
     400: "validation_failed",
@@ -44,6 +47,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.routing_config = ROUTING_CONFIG
     app.state.clock = SystemBusinessClock()
+    # CRM port resolved once, with the worker's resolver; tests
+    # may replace app.state.crm with a fake.
+    app.state.crm = _resolve_crm(settings)
     engine = make_engine(settings.database_url)
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
@@ -135,6 +141,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(reviews.router)
     app.include_router(tasks.router)
     app.include_router(jobs.router)
+    app.include_router(integrations.router)
+    app.include_router(integrations.workers_router)
 
     def build_openapi() -> dict:
         # Schema metadata only: declare the session-cookie scheme
