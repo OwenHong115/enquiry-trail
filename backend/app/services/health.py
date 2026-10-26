@@ -84,7 +84,8 @@ def resume_provider_versioned(
     operator_id: uuid.UUID,
     reason: str,
     expected_updated_at,
-):
+    expected_status: str = "blocked",
+) -> object:
     """Resume a blocked provider under an optimistic version check.
 
     The health row is read FOR UPDATE; absent -> not_found, not
@@ -101,7 +102,7 @@ def resume_provider_versioned(
         row = health_repo.get_integration_for_update(session, provider)
         if row is None:
             raise ResumeRejected("not_found")
-        if row.status != "blocked":
+        if row.status != expected_status:
             raise ResumeRejected("invalid_state")
         if row.updated_at != expected_updated_at:
             raise ResumeRejected("version_conflict")

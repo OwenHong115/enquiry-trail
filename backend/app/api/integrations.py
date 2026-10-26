@@ -114,6 +114,7 @@ def resume_integration(
             operator_id=resolved.operator_id,
             reason=body.reason,
             expected_updated_at=body.expected_updated_at,
+            expected_status=body.expected_status,
         )
     except ResumeRejected as rejected:
         if rejected.code == "not_found":
