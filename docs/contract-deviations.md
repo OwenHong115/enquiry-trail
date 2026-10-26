@@ -144,11 +144,41 @@ shapes are strict subsets of the existing detail/task public fields:
   provider-sim:8091 rather than a container-local 127.0.0.1. The
   provider-sim port remains unpublished.
 
+## P3a ingress hardening (local decisions)
+
+- Exact Origin: on unsafe methods (POST/PUT/PATCH/DELETE, public health
+  paths excepted), a present Origin header must exactly match a configured
+  origin or the request is 403 `origin_invalid` in the normal envelope;
+  `Origin: null` never matches. An absent Origin is allowed: non-browser
+  and CLI clients send none, and CSRF remains the session-write
+  protection. Safe methods are not gated and no CORS middleware or
+  headers are added. ALLOWED_ORIGINS entries are exact
+  scheme://host[:port] origins (no path, wildcard or trailing slash),
+  validated at startup; when unset, the single allowed origin is derived
+  from APP_BASE_URL.
+- Body bound: MAX_REQUEST_BYTES (default 65536, positive) applies to
+  every request. An oversized Content-Length is rejected 413
+  `payload_too_large` before the app runs; otherwise the middleware
+  counts the streamed body and aborts at the bound - an oversized
+  chunked body is never buffered in full, and an in-bound body is
+  replayed to the route unchanged. Rejections use the error envelope
+  with the request id.
+- Trusted proxies: TRUSTED_PROXIES is a validated IP/CIDR list, empty
+  (trust none) by default. The effective client IP is the direct peer
+  unless that peer is trusted, in which case X-Forwarded-For is walked
+  from the rightmost hop leftwards past trusted addresses and the
+  first untrusted address wins (the leftmost if all are trusted). An
+  untrusted peer's X-Forwarded-For is ignored entirely; a malformed
+  chain or missing peer fails safe to the peer/None. This helper
+  (app/security/proxy.py) exists for the P3b rate-limit slice; no rate
+  limiting is implemented here, and signed webhooks remain P3c.
+
 ## Delivery boundaries (not implemented features)
 
 - Adapter and simulator exist (P1a); the persistent worker loop,
-  heartbeat, seed and Compose exist (P1b); no UI (P4); no Origin/body/
-  rate-limit/webhook hardening (P3); no connected/live CRM; no
+  heartbeat, seed and Compose exist (P1b); no UI (P4); Origin/body/
+  trusted-proxy hardening exists (P3a) while rate limits and signed
+  webhooks are still pending (P3b/P3c); no connected/live CRM; no
   acceptance signoff.
 - Public deployment hardening (HTTPS cookie policy, origin policy, rate limiting,
   request-size controls) is P3/P7 work, not authorized by this slice.

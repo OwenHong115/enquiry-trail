@@ -112,7 +112,7 @@ P1a (this branch) delivers the HTTP CRM adapter and provider simulator. Still mi
 | S7b intake endpoint | complete |
 | S7c read endpoints and the detail shape | complete |
 | S7d operator actions and conflict mapping | complete |
-| S7e webhook, rate limits, origin and proxy handling | planned (P3 intake security) |
+| S7e webhook, rate limits, origin and proxy handling | origin/body/trusted-proxy implemented on feat/p3-ingress-hardening (P3a); rate limits and signed webhooks planned (P3b/P3c) |
 | S8 extraction and fault injection | planned (P5 AI extraction; fault demonstration P6) |
 | P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | locally complete on fix/p0-closeout; merge/CI gate in docs/closeout-review.md |
 | P1a HTTP CRM adapter + provider simulator | implemented on feat/crm-http-adapter (stacked on P0 until P0 merges); PR 2 |
