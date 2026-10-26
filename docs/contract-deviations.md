@@ -78,6 +78,28 @@ shapes are strict subsets of the existing detail/task public fields:
   values are 422. Tasks add an optional `overdue=true` filter (open and
   due_at before the business clock).
 
+## A33 enquiry event timeline (local decisions)
+
+- `GET /api/v1/enquiries/{enquiry_id}/events` returns visible events in
+  event_seq ASC order as `{"items": [...], "next_cursor": string|null}`.
+  Items expose id, event_type, severity, actor_type, actor_id, details and
+  created_at; event_seq itself is never exposed - the opaque cursor
+  (base64 of the last returned event_seq) carries it. Pages read
+  event_seq > cursor with limit+1; invalid cursors are 422.
+- Visibility: the audit-only set is exactly {job.manual_retry}; those
+  events may consume event_seq and are simply skipped by cursors.
+  integration.resumed has enquiry_id=None and can never appear on an
+  enquiry timeline. Every other event type is visible.
+- Commit safety: every visible event writer takes a transaction-scoped
+  advisory lock keyed by enquiry_id (app/db/event_repo.py, namespace
+  `enquiry_event`) before inserting, and holds it to commit, so
+  per-enquiry seq allocation and commit are serialised and a polling
+  reader can neither skip nor duplicate an event. Audit-only writers
+  do not take the lock.
+- Lock order is consistent everywhere: existing row locks first (job,
+  contact, enquiry, task and health rows), then the event advisory
+  lock, taken inside the event insert functions themselves.
+
 ## Delivery boundaries (not implemented features)
 
 - Adapter and simulator exist (P1a); no persistent worker loop,
