@@ -19,14 +19,9 @@ from sqlalchemy.orm import Session
 
 from app.db import health_repo, list_repo
 
-PROCESSING_SUMMARIES = (
-    "processing", "waiting_retry", "blocked", "reconciling", "ready", "failed",
-)
-ATTENTIONS = (
-    "none", "review_required", "retry_scheduled", "notification_uncertain",
-    "integration_blocked", "intervention_required",
-)
-TASK_STATUSES = ("open", "completed", "cancelled")
+# Published vocabularies live once, as the API Literals in
+# app/api/enquiries.py (enquiries) and app/api/tasks.py (tasks);
+# they are not duplicated here.
 
 
 @dataclass(frozen=True)

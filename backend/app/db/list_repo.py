@@ -8,6 +8,7 @@ page is never N+1. Keyset order is (timestamp DESC, id DESC).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -88,14 +89,19 @@ def fetch_enquiry_rows(
         stmt = stmt.where(owner.c.code == owner_code)
     if q:
         like = f"%{q}%"
-        stmt = stmt.where(
-            or_(
-                tables.contacts.c.email_norm.ilike(like),
-                tables.contacts.c.first_name.ilike(like),
-                tables.contacts.c.last_name.ilike(like),
-                tables.enquiries.c.display_no.cast(String).ilike(like),
+        conditions = [
+            tables.contacts.c.email_norm.ilike(like),
+            tables.contacts.c.first_name.ilike(like),
+            tables.contacts.c.last_name.ilike(like),
+        ]
+        # Public display number: q may be ENQ-000001, ENQ-1 or the
+        # bare digits 0001; all parse to the integer display_no.
+        match = re.fullmatch(r"(?:ENQ-)?(\d+)", q.strip(), re.IGNORECASE)
+        if match:
+            conditions.append(
+                tables.enquiries.c.display_no == int(match.group(1))
             )
-        )
+        stmt = stmt.where(or_(*conditions))
     stmt = stmt.order_by(
         tables.enquiries.c.received_at.desc(), tables.enquiries.c.id.desc()
     ).limit(batch)
