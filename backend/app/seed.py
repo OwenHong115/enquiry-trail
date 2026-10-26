@@ -27,6 +27,14 @@ def seed(session: Session, *, operator_username: str = "demo-operator",
     with session.begin():
         for owner in owners:
             seed_repo.upsert_owner(session, owner["code"], owner["display_name"])
+        # Known providers, inserted once and never reset: an
+        # existing blocked/ok row survives every later seed.
+        for provider, provider_status in (
+            ("hubspot", "ok"), ("slack", "disabled"), ("ai", "disabled"),
+        ):
+            seed_repo.insert_integration_health(
+                session, provider, provider_status
+            )
         operator_created = False
         if operator_password:
             existing = seed_repo.get_operator_by_username(session, operator_username)

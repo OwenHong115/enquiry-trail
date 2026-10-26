@@ -18,6 +18,16 @@ def upsert_owner(session: Session, code: str, display_name: str) -> None:
     session.execute(stmt)
 
 
+def insert_integration_health(session: Session, provider: str, status: str) -> None:
+    """Insert a known provider row once; never reset an existing one."""
+    stmt = (
+        pg_insert(tables.integration_health)
+        .values(provider=provider, status=status)
+        .on_conflict_do_nothing(index_elements=["provider"])
+    )
+    session.execute(stmt)
+
+
 def get_operator_by_username(session: Session, username: str):
     return session.execute(
         select(tables.operators.c.id, tables.operators.c.password_hash)

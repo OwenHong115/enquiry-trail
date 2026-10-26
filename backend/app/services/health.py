@@ -64,6 +64,96 @@ def block_provider(
     return incident_id
 
 
+KNOWN_PROVIDERS = ("hubspot", "slack", "ai")
+
+
+class ResumeRejected(Exception):
+    """A versioned resume that must not resume, with its API code."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def resume_provider_versioned(
+    session: Session,
+    provider: str,
+    crm: CrmPort,
+    clock: BusinessClock,
+    *,
+    operator_id: uuid.UUID,
+    reason: str,
+    expected_updated_at,
+):
+    """Resume a blocked provider under an optimistic version check.
+
+    The health row is read FOR UPDATE; absent -> not_found, not
+    blocked -> invalid_state, updated_at mismatch ->
+    version_conflict. The probe runs inside this row-locked
+    transaction (bounded by the 15s adapter deadline; the F10
+    limitation recorded in docs) and a failed probe raises
+    resume_failed having changed nothing. On success the same
+    transaction marks ok, requeues blocked sync jobs in a new
+    cycle and emits exactly one integration.resumed event.
+    Returns the updated health row.
+    """
+    with session.begin():
+        row = health_repo.get_integration_for_update(session, provider)
+        if row is None:
+            raise ResumeRejected("not_found")
+        if row.status != "blocked":
+            raise ResumeRejected("invalid_state")
+        if row.updated_at != expected_updated_at:
+            raise ResumeRejected("version_conflict")
+        probe_job_id = health_repo.earliest_blocked_sync_job(session)
+        context = CallContext(
+            scenario_run_id=None,
+            job_id=probe_job_id or uuid.UUID(int=0),
+            cycle_no=1,
+            attempt_no=1,
+            external_operation_id=None,
+            deadline_seconds=HTTP_DEADLINE_SECONDS,
+        )
+        result = crm.probe(context)
+        if not result.ok:
+            raise ResumeRejected("resume_failed")
+        incident_id = row.incident_id
+        health_repo.set_health_ok(session, provider)
+        health_repo.requeue_blocked_sync_jobs(
+            session, next_attempt_at=clock.now_utc()
+        )
+        health_repo.insert_resumed_event(
+            session,
+            provider=provider,
+            incident_id=incident_id,
+            operator_id=operator_id,
+            reason=reason,
+        )
+        return health_repo.get_integration_for_update(session, provider)
+
+
+def stale_after_seconds(heartbeat_seconds: float) -> float:
+    """Worker stale threshold: 3 missed heartbeats, at least 15s."""
+    return max(3 * heartbeat_seconds, 15.0)
+
+
+def worker_health(session: Session, *, heartbeat_seconds: float) -> dict:
+    """Worker liveness from heartbeats, compared on the DB clock."""
+    db_now, rows = health_repo.list_workers(session)
+    threshold = stale_after_seconds(heartbeat_seconds)
+    workers = []
+    for row in rows:
+        age = (db_now - row.last_seen_at).total_seconds()
+        workers.append({
+            "worker_id": row.worker_id,
+            "started_at": row.started_at,
+            "last_seen_at": row.last_seen_at,
+            "active_job_count": row.active_job_count,
+            "status": "alive" if age <= threshold else "stale",
+        })
+    return {"workers": workers, "stale_after_seconds": threshold}
+
+
 def resume_provider(
     session: Session,
     provider: str,
