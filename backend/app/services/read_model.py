@@ -17,7 +17,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.db import health_repo, list_repo
+from app.db import event_repo, health_repo, list_repo
+
+# Audit-only event types: written for the operator audit trail and
+# never shown on an enquiry timeline (they may consume event_seq;
+# cursors simply skip them). Exact set, also recorded in
+# docs/contract-deviations.md: job.manual_retry only.
+# integration.resumed carries enquiry_id=None, so it can never
+# appear on an enquiry timeline either.
+AUDIT_ONLY_EVENT_TYPES = frozenset({"job.manual_retry"})
 
 # Published vocabularies live once, as the API Literals in
 # app/api/enquiries.py (enquiries) and app/api/tasks.py (tasks);
@@ -160,6 +168,57 @@ def decode_cursor(raw: str) -> CursorKey:
         return CursorKey(created_at=created, id=uuid.UUID(data["id"]))
     except Exception as err:
         raise InvalidCursor("invalid cursor") from err
+
+
+@dataclass(frozen=True)
+class EventSeqCursor:
+    seq: int
+
+
+def encode_event_cursor(event_seq: int) -> str:
+    """Opaque timeline cursor carrying only an event_seq."""
+    raw = json.dumps({"seq": event_seq}, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def decode_event_cursor(raw: str) -> int:
+    try:
+        data = json.loads(
+            base64.b64decode(
+                raw.encode("ascii"), altchars=b"-_", validate=True
+            ).decode("utf-8")
+        )
+        seq = data["seq"]
+        if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+            raise ValueError("bad seq")
+        return EventSeqCursor(seq=seq).seq
+    except Exception as err:
+        raise InvalidCursor("invalid cursor") from err
+
+
+def list_events(
+    session: Session,
+    enquiry_id: uuid.UUID,
+    *,
+    limit: int,
+    cursor_seq: int | None,
+) -> tuple[list, str | None] | None:
+    """One timeline page (event_seq ASC), or None if no such enquiry.
+
+    Returns (items, next_cursor): next_cursor is the last returned
+    event_seq, present only when more visible events exist.
+    """
+    if not event_repo.enquiry_exists(session, enquiry_id):
+        return None
+    rows = event_repo.fetch_events(
+        session, enquiry_id, after_seq=cursor_seq, limit=limit + 1,
+        excluded_types=AUDIT_ONLY_EVENT_TYPES,
+    )
+    items = rows[:limit]
+    next_cursor = None
+    if len(rows) > limit:
+        next_cursor = encode_event_cursor(items[-1].event_seq)
+    return items, next_cursor
 
 
 @dataclass(frozen=True)

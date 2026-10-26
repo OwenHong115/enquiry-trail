@@ -9,6 +9,7 @@ defaults fill the rest.
 from __future__ import annotations
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -207,6 +208,10 @@ activity_events = Table(
     Column("actor_type", Text, nullable=False),
     Column("actor_id", Uuid),
     Column("details_json", JSONB, nullable=False),
+    Column("event_seq", BigInteger, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("contact_id", Uuid),
+    Column("scenario_run_id", Uuid),
 )
 
 worker_heartbeats = Table(

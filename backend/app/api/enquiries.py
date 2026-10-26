@@ -17,6 +17,7 @@ from app.api.errors import ApiError, ErrorEnvelope
 from app.db import enquiry_repo, health_repo
 from app.db.session import get_session
 from app.security import sessions as session_service
+from app.services import read_model
 from app.services.read_model import (
     DetailStatus,
     InvalidCursor,
@@ -24,7 +25,6 @@ from app.services.read_model import (
     encode_cursor,
     map_detail_status,
 )
-from app.services import read_model
 
 __all__ = ["DetailStatus", "map_detail_status"]
 
@@ -151,6 +151,21 @@ class EnquiryListItemOut(BaseModel):
 
 class EnquiryListOut(BaseModel):
     items: list[EnquiryListItemOut]
+    next_cursor: str | None
+
+
+class EventItemOut(BaseModel):
+    id: uuid.UUID
+    event_type: str
+    severity: str
+    actor_type: str
+    actor_id: uuid.UUID | None
+    details: dict
+    created_at: datetime
+
+
+class EventListOut(BaseModel):
+    items: list[EventItemOut]
     next_cursor: str | None
 
 
@@ -357,10 +372,54 @@ def list_enquiries_route(
 
 
 @router.get(
+    "/{enquiry_id}/events",
+    response_model=EventListOut,
+    responses={401: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope},
+               422: {"model": ErrorEnvelope}},
+)
+def list_enquiry_events(
+    enquiry_id: uuid.UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+    limit: int = Query(default=25, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+):
+    require_authenticated(request, session)
+    cursor_seq = None
+    if cursor is not None:
+        try:
+            cursor_seq = read_model.decode_event_cursor(cursor)
+        except InvalidCursor as err:
+            raise ApiError(
+                422, "validation_failed", "Invalid cursor",
+                field_errors=[{"path": "cursor", "message": "invalid cursor"}],
+            ) from err
+    result = read_model.list_events(
+        session, enquiry_id, limit=limit, cursor_seq=cursor_seq
+    )
+    if result is None:
+        raise ApiError(404, "not_found", "Enquiry not found")
+    rows, next_cursor = result
+    return EventListOut(
+        items=[
+            EventItemOut(
+                id=row.id,
+                event_type=row.event_type,
+                severity=row.severity,
+                actor_type=row.actor_type,
+                actor_id=row.actor_id,
+                details=row.details_json,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ],
+        next_cursor=next_cursor,
+    )
+
+
+@router.get(
     "/{enquiry_id}",
     response_model=EnquiryDetailOut,
-    # Schema metadata only: enforcement stays in the route's
-    # session resolution.
     responses={
         401: {"model": ErrorEnvelope},
         404: {"model": ErrorEnvelope},

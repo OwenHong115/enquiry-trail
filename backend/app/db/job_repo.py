@@ -10,7 +10,7 @@ from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db import tables
+from app.db import event_repo, tables
 
 
 def select_claimable(session: Session, due_before: datetime) -> Any | None:
@@ -131,7 +131,12 @@ def insert_attempt(
     ).scalar_one()
 
 
-def insert_lease_recovered_event(
+def insert_lease_recovered_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_lease_recovered_event_locked(session, *args, **kwargs)
+
+
+def _insert_lease_recovered_event_locked(
     session: Session,
     *,
     job_id: uuid.UUID,
@@ -313,7 +318,12 @@ def reschedule_reconciling_job(
     return result.rowcount
 
 
-def insert_retry_scheduled_event(
+def insert_retry_scheduled_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_retry_scheduled_event_locked(session, *args, **kwargs)
+
+
+def _insert_retry_scheduled_event_locked(
     session: Session,
     *,
     job_id: uuid.UUID,
@@ -339,7 +349,12 @@ def insert_retry_scheduled_event(
     ).scalar_one()
 
 
-def insert_job_failed_event(
+def insert_job_failed_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_job_failed_event_locked(session, *args, **kwargs)
+
+
+def _insert_job_failed_event_locked(
     session: Session,
     *,
     job_id: uuid.UUID,
@@ -604,7 +619,12 @@ def rearm_sync_job(
     return result.rowcount
 
 
-def insert_prepared_event(
+def insert_prepared_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_prepared_event_locked(session, *args, **kwargs)
+
+
+def _insert_prepared_event_locked(
     session: Session,
     *,
     enquiry_id: uuid.UUID,
