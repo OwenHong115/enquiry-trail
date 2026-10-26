@@ -11,7 +11,7 @@ from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db import tables
+from app.db import event_repo, tables
 
 
 def take_content_lock(session: Session, lock_key: int) -> None:
@@ -293,7 +293,12 @@ def insert_initial_job(
     ).scalar_one()
 
 
-def insert_received_event(
+def insert_received_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_received_event_locked(session, *args, **kwargs)
+
+
+def _insert_received_event_locked(
     session: Session, *, enquiry_id: uuid.UUID, source: str
 ) -> uuid.UUID:
     return session.execute(
@@ -336,7 +341,12 @@ def insert_duplicate_receipt(
     ).scalar_one()
 
 
-def insert_content_duplicate_event(
+def insert_content_duplicate_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_content_duplicate_event_locked(session, *args, **kwargs)
+
+
+def _insert_content_duplicate_event_locked(
     session: Session,
     *,
     enquiry_id: uuid.UUID,
@@ -359,7 +369,12 @@ def insert_content_duplicate_event(
     ).scalar_one()
 
 
-def insert_possible_duplicate_event(
+def insert_possible_duplicate_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_possible_duplicate_event_locked(session, *args, **kwargs)
+
+
+def _insert_possible_duplicate_event_locked(
     session: Session,
     *,
     enquiry_id: uuid.UUID,

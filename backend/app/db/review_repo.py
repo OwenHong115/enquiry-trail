@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
-from app.db import tables
+from app.db import event_repo, tables
 
 
 def conditional_resolve(
@@ -47,7 +47,12 @@ def get_enquiry_version(
     ).scalar_one_or_none()
 
 
-def insert_review_resolved_event(
+def insert_review_resolved_event(session, *args, **kwargs):
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_review_resolved_event_locked(session, *args, **kwargs)
+
+
+def _insert_review_resolved_event_locked(
     session: Session,
     *,
     enquiry_id: uuid.UUID,

@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
-from app.db import tables
+from app.db import event_repo, tables
 
 
 def get_task_for_update(
@@ -80,7 +80,12 @@ def update_task_terminal(
     return result.rowcount
 
 
-def insert_task_event(
+def insert_task_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_task_event_locked(session, *args, **kwargs)
+
+
+def _insert_task_event_locked(
     session: Session,
     *,
     enquiry_id: uuid.UUID,

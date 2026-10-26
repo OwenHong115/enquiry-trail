@@ -9,7 +9,7 @@ from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db import tables
+from app.db import event_repo, tables
 
 
 def get_enquiry_contact(session: Session, enquiry_id: uuid.UUID) -> Any | None:
@@ -191,7 +191,12 @@ def touch_operation_readback(session: Session, operation_id: uuid.UUID) -> None:
     )
 
 
-def insert_operation_unknown_event(
+def insert_operation_unknown_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_operation_unknown_event_locked(session, *args, **kwargs)
+
+
+def _insert_operation_unknown_event_locked(
     session: Session,
     *,
     job_id: uuid.UUID,
@@ -212,7 +217,12 @@ def insert_operation_unknown_event(
     ).scalar_one()
 
 
-def insert_recovered_event(
+def insert_recovered_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_recovered_event_locked(session, *args, **kwargs)
+
+
+def _insert_recovered_event_locked(
     session: Session,
     *,
     enquiry_id: uuid.UUID,
@@ -235,7 +245,12 @@ def insert_recovered_event(
     ).scalar_one()
 
 
-def insert_synced_event(
+def insert_synced_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_synced_event_locked(session, *args, **kwargs)
+
+
+def _insert_synced_event_locked(
     session: Session,
     *,
     enquiry_id: uuid.UUID,
@@ -258,7 +273,12 @@ def insert_synced_event(
     ).scalar_one()
 
 
-def insert_field_preserved_event(
+def insert_field_preserved_event(session: Session, *args: Any, **kwargs: Any) -> uuid.UUID:
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_field_preserved_event_locked(session, *args, **kwargs)
+
+
+def _insert_field_preserved_event_locked(
     session: Session,
     *,
     enquiry_id: uuid.UUID,
