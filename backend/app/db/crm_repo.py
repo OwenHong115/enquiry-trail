@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,15 @@ def get_enquiry_contact(session: Session, enquiry_id: uuid.UUID) -> Any | None:
             tables.contacts.c.last_name,
             tables.contacts.c.phone_e164,
             tables.contacts.c.version,
+            func.coalesce(
+                select(tables.crm_links.c.synced_contact_version)
+                .where(
+                    tables.crm_links.c.contact_id == tables.contacts.c.id,
+                    tables.crm_links.c.provider == "hubspot",
+                )
+                .scalar_subquery(),
+                0,
+            ).label("synced_contact_version"),
         )
         .join(
             tables.enquiries,
@@ -28,6 +37,25 @@ def get_enquiry_contact(session: Session, enquiry_id: uuid.UUID) -> Any | None:
         )
         .where(tables.enquiries.c.id == enquiry_id)
     ).one_or_none()
+
+
+def get_current_contact_version(
+    session: Session, enquiry_id: uuid.UUID
+) -> int | None:
+    """Current committed contact version for an enquiry's contact."""
+    return session.execute(
+        select(tables.contacts.c.version)
+        .join(
+            tables.enquiries,
+            tables.enquiries.c.contact_id == tables.contacts.c.id,
+        )
+        .outerjoin(
+            tables.crm_links,
+            (tables.crm_links.c.contact_id == tables.contacts.c.id)
+            & (tables.crm_links.c.provider == "hubspot"),
+        )
+        .where(tables.enquiries.c.id == enquiry_id)
+    ).scalar_one_or_none()
 
 
 def upsert_crm_link(
@@ -52,7 +80,11 @@ def upsert_crm_link(
             set_={
                 "remote_id": remote_id,
                 "sync_status": "synced",
-                "synced_contact_version": synced_contact_version,
+                # Never downgrade a link already synced further (A32).
+                "synced_contact_version": func.greatest(
+                    tables.crm_links.c.synced_contact_version,
+                    synced_contact_version,
+                ),
                 "last_synced_at": text("clock_timestamp()"),
             },
         )

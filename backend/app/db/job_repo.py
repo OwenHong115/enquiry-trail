@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -486,6 +486,122 @@ def insert_sync_job(
         .on_conflict_do_nothing(index_elements=["dedupe_key"])
     )
     session.execute(stmt)
+    # A32 rearm: a succeeded stable job whose link lags the current
+    # contact version becomes pending again for the new version, in
+    # place (same dedupe key/row). Any other state is left alone:
+    # pending/running/waiting work loads the latest contact when it
+    # runs, and a reconciling job must stay readback-first.
+    behind = (
+        select(1)
+        .select_from(
+            tables.contacts.outerjoin(
+                tables.crm_links,
+                (tables.crm_links.c.contact_id == tables.contacts.c.id)
+                & (tables.crm_links.c.provider == "hubspot"),
+            )
+        )
+        .where(
+            tables.contacts.c.id == contact_id,
+            tables.contacts.c.version
+            > func.coalesce(tables.crm_links.c.synced_contact_version, 0),
+        )
+        .exists()
+    )
+    session.execute(
+        update(tables.jobs)
+        .where(
+            tables.jobs.c.dedupe_key == f"sync_contact:{contact_id}",
+            tables.jobs.c.kind == "sync_contact",
+            tables.jobs.c.state == "succeeded",
+            behind,
+        )
+        .values(
+            state="pending",
+            cycle_no=tables.jobs.c.cycle_no + 1,
+            cycle_attempt_count=0,
+            next_attempt_at=next_attempt_at,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            last_error_code=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+
+
+def rearm_sync_job_for_contact(
+    session: Session,
+    *,
+    contact_id: uuid.UUID,
+    next_attempt_at: datetime,
+) -> None:
+    """Rearm a succeeded stable sync job lagging the contact version.
+
+    Used by the content-duplicate intake path, which creates no new
+    sync job: a not-yet-created job is left for the prepare step.
+    """
+    behind = (
+        select(1)
+        .select_from(
+            tables.contacts.outerjoin(
+                tables.crm_links,
+                (tables.crm_links.c.contact_id == tables.contacts.c.id)
+                & (tables.crm_links.c.provider == "hubspot"),
+            )
+        )
+        .where(
+            tables.contacts.c.id == contact_id,
+            tables.contacts.c.version
+            > func.coalesce(tables.crm_links.c.synced_contact_version, 0),
+        )
+        .exists()
+    )
+    session.execute(
+        update(tables.jobs)
+        .where(
+            tables.jobs.c.dedupe_key == f"sync_contact:{contact_id}",
+            tables.jobs.c.kind == "sync_contact",
+            tables.jobs.c.state == "succeeded",
+            behind,
+        )
+        .values(
+            state="pending",
+            cycle_no=tables.jobs.c.cycle_no + 1,
+            cycle_attempt_count=0,
+            next_attempt_at=next_attempt_at,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            last_error_code=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+
+
+def rearm_sync_job(
+    session: Session,
+    job_id: uuid.UUID,
+    *,
+    next_attempt_at: datetime,
+    lease_token: uuid.UUID | None = None,
+) -> int:
+    """Return a running sync job to pending for a newer contact version."""
+    result = session.execute(
+        update(tables.jobs)
+        .where(*_job_where(job_id, lease_token))
+        .values(
+            state="pending",
+            cycle_no=tables.jobs.c.cycle_no + 1,
+            cycle_attempt_count=0,
+            next_attempt_at=next_attempt_at,
+            lease_token=None,
+            lease_until=None,
+            heartbeat_at=None,
+            last_error_code=None,
+            updated_at=text("clock_timestamp()"),
+        )
+    )
+    return result.rowcount
 
 
 def insert_prepared_event(

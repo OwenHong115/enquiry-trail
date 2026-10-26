@@ -268,7 +268,7 @@ def test_a10_preserves_nonblank_remote_fields(postgres_db: str) -> None:
     fake = _found_fake()
     _claim_and_handle_sync(postgres_db, clock, fake)
 
-    # Contract A10/EmptyFieldPatch: only the readback-confirmed
+    # Contract A10/ContactFieldPatch: only the readback-confirmed
     # empty field (lastname) is patched, with the local value.
     patches = fake.calls_of("patch_contact")
     assert len(patches) == 1

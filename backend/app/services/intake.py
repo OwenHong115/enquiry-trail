@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db import intake_repo
+from app.db import intake_repo, job_repo
 from app.domain.normalization import normalize_email, normalize_phone
 from app.domain.routing import RoutingDecision, evaluate_routing, routing_config_hash
 from app.ports.clock import BusinessClock
@@ -209,6 +209,24 @@ def _submit_intake_once(
             seconds=CONTENT_WINDOW_SECONDS
         ):
             try:
+                # Canonical duplicate: the contact data is identical
+                # by fingerprint definition, so this update is a
+                # no-op safeguard; it also rearms a lagging sync job.
+                intake_repo.take_email_lock(session, email)
+                dup_contact_id, _dup_version, _dup_inserted = (
+                    intake_repo.insert_contact(
+                        session,
+                        email_norm=email,
+                        first_name=canonical_payload["first_name"],
+                        last_name=canonical_payload["last_name"],
+                        phone_e164=phone,
+                    )
+                )
+                job_repo.rearm_sync_job_for_contact(
+                    session,
+                    contact_id=dup_contact_id,
+                    next_attempt_at=received_at,
+                )
                 duplicate_id = intake_repo.insert_duplicate_receipt(
                     session,
                     source=source,
@@ -251,7 +269,8 @@ def _submit_intake_once(
         # write itself is a single atomic INSERT ... ON CONFLICT
         # DO NOTHING, so there is no read-then-insert window even
         # for a writer that ignores the advisory lock; a returning
-        # customer's row (and version) comes back unchanged.
+        # customer's row is updated under this lock when new valid
+        # phone/name data arrives, advancing its version (A32).
         intake_repo.take_email_lock(session, email)
         contact_id, contact_version, contact_inserted = (
             intake_repo.insert_contact(

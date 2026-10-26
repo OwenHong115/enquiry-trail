@@ -8,8 +8,8 @@ from typing import Any
 
 from app.ports.crm import (
     CallContext,
+    ContactFieldPatch,
     CreateContact,
-    EmptyFieldPatch,
     FoundContact,
     NotFound,
     ProbeResult,
@@ -132,7 +132,7 @@ class FakeCrm:
         return committed
 
     def patch_contact(
-        self, remote_id: str, fields: EmptyFieldPatch, context: CallContext
+        self, remote_id: str, fields: ContactFieldPatch, context: CallContext
     ) -> FoundContact:
         sent: dict[str, Any] = {}
         if fields.firstname is not None:
@@ -147,14 +147,29 @@ class FakeCrm:
             )
         )
         self._maybe_raise()
-        base = self.by_email if isinstance(self.by_email, FoundContact) else None
-        return FoundContact(
+        # A patch persists to the stored remote contact, as the
+        # real provider's would, not only to the returned value.
+        base = next(
+            (c for c in self.remote_by_email.values()
+             if c.remote_id == remote_id),
+            None,
+        )
+        if base is None and isinstance(self.by_email, FoundContact) \
+                and self.by_email.remote_id == remote_id:
+            base = self.by_email
+        updated = FoundContact(
             remote_id=remote_id,
             email=base.email if base else "",
             firstname=sent.get("firstname", base.firstname if base else None),
             lastname=sent.get("lastname", base.lastname if base else None),
             phone=sent.get("phone", base.phone if base else None),
         )
+        if updated.email:
+            self.remote_by_email[updated.email] = updated
+        if isinstance(self.by_email, FoundContact) \
+                and self.by_email.remote_id == remote_id:
+            self.by_email = updated
+        return updated
 
     def probe(self, context: CallContext) -> ProbeResult:
         self.calls.append(RecordedCall("probe", {}, context))

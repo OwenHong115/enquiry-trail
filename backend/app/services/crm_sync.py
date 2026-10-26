@@ -15,9 +15,10 @@ from app.ports.crm import (
     CallContext,
     CreateContact,
     CrmPort,
-    EmptyFieldPatch,
+    ContactFieldPatch,
     FoundContact,
     NotFound,
+    ProviderError,
 )
 from typing import TYPE_CHECKING
 
@@ -111,6 +112,17 @@ def begin_sync(session: Session, claim: ClaimedJob, crm: CrmPort) -> SyncLookup:
     raise ValueError(f"unexpected CRM lookup result: {found!r}")
 
 
+def _version_advanced(contact: Any) -> bool:
+    """True when this sync must apply a newer local version (A32).
+
+    The baseline version (1) adopts a pre-existing remote contact
+    as-is; a version beyond both 1 and the link's already-synced
+    version carries app-owned changes the remote must receive.
+    """
+    synced = getattr(contact, "synced_contact_version", 0) or 0
+    return contact.version > 1 and contact.version > synced
+
+
 def existing_patch_candidates(contact: Any, found: FoundContact) -> dict[str, str]:
     local_values = {
         "firstname": contact.first_name,
@@ -124,7 +136,13 @@ def existing_patch_candidates(contact: Any, found: FoundContact) -> dict[str, st
     }
     candidates: dict[str, str] = {}
     for prop in ("firstname", "lastname", "phone"):
-        if _is_blank(remote_values[prop]) and not _is_blank(local_values[prop]):
+        if not _is_blank(local_values[prop]) and (
+            _is_blank(remote_values[prop])
+            or (
+                _version_advanced(contact)
+                and remote_values[prop] != local_values[prop]
+            )
+        ):
             candidates[prop] = local_values[prop]  # type: ignore[assignment]
     return candidates
 
@@ -135,16 +153,35 @@ def perform_existing_patch(
     found: FoundContact,
     candidates: dict[str, str],
 ) -> None:
-    """Probe and patch empty remote fields (outside a transaction)."""
+    """Probe and patch remote fields (outside a transaction).
+
+    A candidate that would overwrite a non-empty remote value is
+    required when the local version has advanced: if the provider
+    cannot patch, raise conflict so the caller records it and the
+    link does not advance. Blank-fill candidates at initial
+    adoption remain best-effort (capability-off still syncs, A10).
+    """
     if not candidates:
         return
     probe = crm.probe(context)
     if probe.supports_patch:
-        crm.patch_contact(found.remote_id, EmptyFieldPatch(**candidates), context)
+        crm.patch_contact(found.remote_id, ContactFieldPatch(**candidates), context)
+        return
+    remote_values = {
+        "firstname": found.firstname,
+        "lastname": found.lastname,
+        "phone": found.phone,
+    }
+    if any(
+        not _is_blank(remote_values[prop]) for prop in candidates
+    ):
+        # Required overwrite cannot be applied: never advance.
+        raise ProviderError("conflict")
 
 
 def record_existing_sync(
-    session: Session, claim: ClaimedJob, contact: Any, found: FoundContact
+    session: Session, claim: ClaimedJob, contact: Any, found: FoundContact,
+    patched_fields: Any = None
 ) -> None:
     local_values = {
         "firstname": contact.first_name,
@@ -159,6 +196,10 @@ def record_existing_sync(
     for prop in ("firstname", "lastname", "phone"):
         local = local_values[prop]
         remote = remote_values[prop]
+        if patched_fields is None:
+            patched_fields = set(existing_patch_candidates(contact, found))
+        if prop in (patched_fields or ()):
+            continue
         if not _is_blank(remote) and not _is_blank(local) and remote != local:
             crm_repo.insert_field_preserved_event(
                 session,

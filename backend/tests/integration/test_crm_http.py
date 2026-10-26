@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.adapters.crm_http import HttpCrmAdapter
 from app.ports.crm import (
-    CallContext, CreateContact, EmptyFieldPatch, FoundContact, NotFound, ProviderError,
+    CallContext, ContactFieldPatch, CreateContact, FoundContact, NotFound, ProviderError,
 )
 from app.worker.claiming import claim_next, handle_claim
 from support.fake_clock import FakeClock
@@ -106,7 +106,7 @@ def test_success_create_lookup_patch_probe(sim):
     assert created.remote_id.startswith("sim-")
     assert adapter.get_contact_by_email(created.email, _ctx()).remote_id == created.remote_id
     assert adapter.get_contact_by_id(created.remote_id, _ctx()).email == created.email
-    patched = adapter.patch_contact(created.remote_id, EmptyFieldPatch(phone="+61400000000"), _ctx())
+    patched = adapter.patch_contact(created.remote_id, ContactFieldPatch(phone="+61400000000"), _ctx())
     assert patched.phone == "+61400000000"
     probe = adapter.probe(_ctx())
     assert probe.ok and probe.supports_patch
@@ -190,7 +190,7 @@ def test_slow_lookup_beyond_deadline(sim):
 
 def test_patch_404_and_probe_failures_and_malformed(sim):
     adapter = _adapter(sim)
-    assert _code(lambda: adapter.patch_contact("sim-missing", EmptyFieldPatch(phone="x"), _ctx())) == "not_found"
+    assert _code(lambda: adapter.patch_contact("sim-missing", ContactFieldPatch(phone="x"), _ctx())) == "not_found"
     assert _adapter(sim, token="wrong").probe(_ctx()).ok is False
     _fault(sim, "error_before_write", "probe")
     assert adapter.probe(_ctx()).ok is False
