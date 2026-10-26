@@ -85,6 +85,50 @@ def get_canonical_anchor(
     ).one_or_none()
 
 
+def find_enquiry_content_anchor(
+    session: Session,
+    source: str,
+    *,
+    email: str,
+    postcode: str | None,
+    service_type: str,
+    message: str,
+    preferred_contact: str,
+) -> Any | None:
+    """Most recent canonical receipt matching enquiry content (A32).
+
+    Contact name/phone are mutable contact data, not enquiry
+    identity: a canonical receipt for the same email whose stored
+    payload matches on postcode, service, collapsed message and
+    preferred contact anchors a duplicate even when the contact
+    fields changed. The stored content_fingerprint is untouched.
+    """
+    rows = session.execute(
+        select(
+            tables.ingestion_receipts.c.enquiry_id,
+            tables.ingestion_receipts.c.received_at,
+            tables.ingestion_receipts.c.payload_json,
+        )
+        .where(
+            tables.ingestion_receipts.c.source == source,
+            tables.ingestion_receipts.c.deduplication == "new",
+            tables.ingestion_receipts.c.payload_json["email"].astext == email,
+        )
+        .order_by(tables.ingestion_receipts.c.received_at.desc())
+        .limit(100)
+    ).all()
+    for row in rows:
+        stored = row.payload_json or {}
+        if (
+            stored.get("postcode") == postcode
+            and stored.get("service_type") == service_type
+            and stored.get("preferred_contact") == preferred_contact
+            and " ".join(str(stored.get("message", "")).split()) == message
+        ):
+            return row
+    return None
+
+
 def get_contact_by_email(
     session: Session, email_norm: str
 ) -> tuple[uuid.UUID, int] | None:

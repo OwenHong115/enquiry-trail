@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db import intake_repo
+from app.db import intake_repo, job_repo
 from app.domain.normalization import normalize_email, normalize_phone
 from app.domain.routing import RoutingDecision, evaluate_routing, routing_config_hash
 from app.ports.clock import BusinessClock
@@ -170,6 +170,20 @@ def _submit_intake_once(
             {field: canonical_payload[field] for field in _PAYLOAD_FIELDS}
         )
         content_fingerprint = _canonical_hash(fingerprint_payload)
+        # A32 enquiry-content key: the enquiry fields only, not
+        # mutable contact name/phone. A resubmission that changes
+        # only contact data still deduplicates the enquiry (below),
+        # while the stored content_fingerprint keeps its contract
+        # definition over the full canonical payload.
+        enquiry_content_hash = _canonical_hash(
+            {
+                "email": email,
+                "postcode": canonical_payload["postcode"],
+                "service_type": canonical_payload["service_type"],
+                "message": fingerprint_payload["message"],
+                "preferred_contact": canonical_payload["preferred_contact"],
+            }
+        )
 
         # Fixed lock order on every path: content -> event key ->
         # email. Every intake acquires in this order only, so a
@@ -180,6 +194,9 @@ def _submit_intake_once(
         # 1. Serialise identical content before any lookup or write.
         intake_repo.take_content_lock(
             session, _content_lock_key(source, content_fingerprint)
+        )
+        intake_repo.take_content_lock(
+            session, _content_lock_key(source, enquiry_content_hash)
         )
         # 2. Serialise one (source, event_key) before the receipt
         # lookup, so same-key races resolve as replay/conflict.
@@ -205,10 +222,46 @@ def _submit_intake_once(
         anchor = intake_repo.get_canonical_anchor(
             session, source, content_fingerprint
         )
+        if anchor is None or (received_at - anchor.received_at) >= timedelta(
+            seconds=CONTENT_WINDOW_SECONDS
+        ):
+            # No full-fingerprint duplicate in window: a match on
+            # enquiry content alone (contact data changed) is the
+            # same enquiry for deduplication (A32).
+            anchor = intake_repo.find_enquiry_content_anchor(
+                session,
+                source,
+                email=email,
+                postcode=canonical_payload["postcode"],
+                service_type=canonical_payload["service_type"],
+                message=fingerprint_payload["message"],
+                preferred_contact=canonical_payload["preferred_contact"],
+            ) or anchor
+        _anchor_considered = bool(anchor
+        )
         if anchor is not None and (received_at - anchor.received_at) < timedelta(
             seconds=CONTENT_WINDOW_SECONDS
         ):
             try:
+                # A32: deduplication drops no contact data. Under
+                # the email lock (lock order content -> event -> email
+                # is preserved), new valid phone/name updates the
+                # contact and rearms the stable sync job in place.
+                intake_repo.take_email_lock(session, email)
+                dup_contact_id, _dup_version, _dup_inserted = (
+                    intake_repo.insert_contact(
+                        session,
+                        email_norm=email,
+                        first_name=canonical_payload["first_name"],
+                        last_name=canonical_payload["last_name"],
+                        phone_e164=phone,
+                    )
+                )
+                job_repo.rearm_sync_job_for_contact(
+                    session,
+                    contact_id=dup_contact_id,
+                    next_attempt_at=received_at,
+                )
                 duplicate_id = intake_repo.insert_duplicate_receipt(
                     session,
                     source=source,

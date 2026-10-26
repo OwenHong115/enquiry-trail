@@ -45,8 +45,14 @@ class CreateContact:
 
 
 @dataclass(frozen=True)
-class EmptyFieldPatch:
-    """Only fields a readback confirmed empty may be set here."""
+class ContactFieldPatch:
+    """App-owned field updates for one remote contact (A32).
+
+    Carries firstname/lastname/phone values to apply to the remote
+    contact: blank-fill at initial adoption, or changed-field
+    overwrite when the local contact version has advanced. Email
+    is identity and is never patched.
+    """
 
     firstname: str | None = None
     lastname: str | None = None
@@ -113,7 +119,7 @@ class CrmPort(Protocol):
     ) -> FoundContact: ...
 
     def patch_contact(
-        self, remote_id: str, fields: EmptyFieldPatch, context: CallContext
+        self, remote_id: str, fields: ContactFieldPatch, context: CallContext
     ) -> FoundContact: ...
 
     def probe(self, context: CallContext) -> ProbeResult: ...

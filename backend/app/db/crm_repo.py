@@ -21,6 +21,15 @@ def get_enquiry_contact(session: Session, enquiry_id: uuid.UUID) -> Any | None:
             tables.contacts.c.last_name,
             tables.contacts.c.phone_e164,
             tables.contacts.c.version,
+            func.coalesce(
+                select(tables.crm_links.c.synced_contact_version)
+                .where(
+                    tables.crm_links.c.contact_id == tables.contacts.c.id,
+                    tables.crm_links.c.provider == "hubspot",
+                )
+                .scalar_subquery(),
+                0,
+            ).label("synced_contact_version"),
         )
         .join(
             tables.enquiries,
@@ -39,6 +48,11 @@ def get_current_contact_version(
         .join(
             tables.enquiries,
             tables.enquiries.c.contact_id == tables.contacts.c.id,
+        )
+        .outerjoin(
+            tables.crm_links,
+            (tables.crm_links.c.contact_id == tables.contacts.c.id)
+            & (tables.crm_links.c.provider == "hubspot"),
         )
         .where(tables.enquiries.c.id == enquiry_id)
     ).scalar_one_or_none()

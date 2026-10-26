@@ -24,7 +24,7 @@ from app.logging import log_event
 from app.ports.crm import (
     CallContext,
     CreateContact,
-    EmptyFieldPatch,
+    ContactFieldPatch,
     FoundContact,
     NotFound,
     ProbeResult,
@@ -262,7 +262,7 @@ class HttpCrmAdapter:
         self._raise_for_status(response, write=True, notfound_is_error=True)
         return self._parse_contact(response)
 
-    def patch_contact(self, remote_id: str, fields: EmptyFieldPatch, context: CallContext) -> FoundContact:
+    def patch_contact(self, remote_id: str, fields: ContactFieldPatch, context: CallContext) -> FoundContact:
         body: dict = {}
         if fields.firstname is not None:
             body["firstname"] = fields.firstname

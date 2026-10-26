@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from datetime import timedelta
 
-from app.db import crm_repo, job_repo
+from app.db import crm_repo, intake_repo, job_repo
 from app.logging import log_event
 from app.ports.clock import BusinessClock
 from app.ports.crm import (
@@ -177,16 +177,25 @@ def _lease_still_held(session: Session, claim: ClaimedJob) -> bool:
 
 
 def _rearm_if_contact_advanced(
-    session: Session, claim: ClaimedJob, clock: BusinessClock, synced_version: int
+    session: Session, claim: ClaimedJob, clock: BusinessClock, synced_version: int,
+    email_norm: str | None = None
 ) -> bool:
     """Rearm the stable job when the contact moved during this sync (A32).
 
-    Called inside the fenced finalization transaction, after the
-    sync for ``synced_version`` has been recorded. True means the
+    Called inside the fenced finalization transaction, before the
     job was returned to pending for the newer version instead of
     being marked succeeded; the recorded link keeps the version
     actually synced and is never downgraded.
     """
+    # Serialize against intake's contact update on the same
+    # per-email advisory lock intake holds (A32): either intake
+    # committed first and we read its new version, or we finish
+    # first and intake's later prepare rearms the succeeded job.
+    if email_norm is None:
+        contact_row = crm_repo.get_enquiry_contact(session, claim.entity_id)
+        email_norm = contact_row.email_norm if contact_row is not None else None
+    if email_norm is not None:
+        intake_repo.take_email_lock(session, email_norm)
     current = crm_repo.get_current_contact_version(session, claim.entity_id)
     if current is None or current <= synced_version:
         return False
@@ -465,6 +474,21 @@ def _handle_readback(
                 lease_token=claim.lease_token,
             )
         return
+    # A32: apply any advanced-version field changes found by the
+    # readback before recording it as synced. A patch failure is
+    # recorded like a readback failure and never marks the
+    # operation reconciled; the unresolved operation stays for
+    # readback-first recovery on the next claim.
+    candidates = crm_sync.existing_patch_candidates(contact, found)  # type: ignore[arg-type]
+    try:
+        crm_sync.perform_existing_patch(crm, context, found, candidates)
+    except ProviderError as err:
+        if not _record_provider_failure(
+            session, claim, clock, scheduler, err,
+            operation_id=None, mark_operation_failed=False,
+        ):
+            raise
+        return
     if not isinstance(found, FoundContact):  # pragma: no cover
         raise ValueError(f"unexpected CRM lookup result: {found!r}")
     with session.begin():
@@ -595,7 +619,7 @@ def _handle_sync_claim(
                 session, claim, clock, lookup.contact.version
             ):
                 crm_sync.record_existing_sync(
-                    session, claim, lookup.contact, found
+                    session, claim, lookup.contact, found, set(candidates)
                 )
                 job_repo.close_attempt(
                     session,
