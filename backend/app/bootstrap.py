@@ -13,6 +13,7 @@ from app.api import (
     auth, enquiries, health, intake, integrations, jobs, reviews, tasks,
 )
 from app.api.errors import ApiError, ErrorEnvelope, envelope_response, error_response
+from app.api.ingress import IngressMiddleware
 from app.config.routing import EXPECTED_ROUTING_SHA256, ROUTING_CONFIG
 from app.db.session import make_engine, make_session_factory
 from app.domain.routing import routing_config_hash
@@ -68,6 +69,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status=response.status_code,
         )
         return response
+
+    app.add_middleware(IngressMiddleware, settings=settings)
 
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError):

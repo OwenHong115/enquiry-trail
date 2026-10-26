@@ -2,9 +2,39 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass
 from urllib.parse import urlparse
+
+
+def _parse_origin(raw: str) -> str:
+    """Validate and normalise one exact origin, or raise ValueError.
+
+    An origin is scheme://host[:port] only: http(s), no path (not
+    even "/"), no query/fragment, no userinfo, no wildcard.
+    """
+    value = raw.strip()
+    if not value or value == "null" or "*" in value or value.endswith("/"):
+        raise ValueError(f"invalid origin: {raw!r}")
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"invalid origin: {raw!r}")
+    if parsed.path or parsed.query or parsed.fragment or parsed.username:
+        raise ValueError(f"invalid origin: {raw!r}")
+    try:
+        port = parsed.port
+    except ValueError as err:
+        raise ValueError(f"invalid origin: {raw!r}") from err
+    host = parsed.hostname.lower()
+    origin = f"{parsed.scheme}://{host}"
+    if port is not None:
+        origin = f"{origin}:{port}"
+    return origin
+
+
+def _split_csv(raw: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
 @dataclass(frozen=True)
@@ -20,6 +50,11 @@ class Settings:
     crm_mode: str = "mock"
     crm_base_url: str = ""
     crm_token: str = ""
+    # P3a ingress hardening. An empty allowed_origins tuple means
+    # "derive the single origin from APP_BASE_URL".
+    allowed_origins: tuple[str, ...] = ()
+    max_request_bytes: int = 65536
+    trusted_proxies: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Fail fast: an empty secret makes CSRF tokens computable
@@ -37,6 +72,19 @@ class Settings:
             parsed = urlparse(self.crm_base_url)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
                 raise ValueError("CRM_BASE_URL must be an http(s) URL with a host")
+        base = urlparse(self.app_base_url)
+        if base.scheme not in ("http", "https") or not base.hostname:
+            raise ValueError("APP_BASE_URL must be an http(s) URL with a host")
+        if base.query or base.fragment:
+            raise ValueError("APP_BASE_URL must not carry a query or fragment")
+        for origin in self.allowed_origins:
+            _parse_origin(origin)
+        if isinstance(self.max_request_bytes, bool) or not isinstance(
+            self.max_request_bytes, int
+        ) or self.max_request_bytes <= 0:
+            raise ValueError("MAX_REQUEST_BYTES must be a positive integer")
+        for proxy in self.trusted_proxies:
+            self._parse_proxy(proxy)
         if not (1 <= self.worker_concurrency <= 16):
             raise ValueError("WORKER_CONCURRENCY must be between 1 and 16")
         for name, value in (
@@ -48,11 +96,34 @@ class Settings:
             if not (0.05 <= value <= 3600):
                 raise ValueError(f"{name} must be between 0.05 and 3600 seconds")
 
+    @staticmethod
+    def _parse_proxy(raw: str):
+        try:
+            return ipaddress.ip_network(raw.strip(), strict=False)
+        except ValueError as err:
+            raise ValueError(f"invalid trusted proxy: {raw!r}") from err
+
+    def resolved_allowed_origins(self) -> tuple[str, ...]:
+        """Configured origins, or the one derived from APP_BASE_URL."""
+        if self.allowed_origins:
+            return tuple(_parse_origin(o) for o in self.allowed_origins)
+        return (_parse_origin(self.app_base_url),)
+
+    def trusted_proxy_networks(self) -> tuple:
+        return tuple(self._parse_proxy(p) for p in self.trusted_proxies)
+
     @classmethod
     def from_env(cls) -> "Settings":
         database_url = os.environ.get("DATABASE_URL")
         if not database_url:
             raise RuntimeError("DATABASE_URL is not set")
+        allowed_raw = os.environ.get("ALLOWED_ORIGINS")
+        if allowed_raw is not None and not _split_csv(allowed_raw):
+            raise ValueError("ALLOWED_ORIGINS must not be an empty list")
+        try:
+            max_bytes = int(os.environ.get("MAX_REQUEST_BYTES", "65536"))
+        except ValueError as err:
+            raise ValueError("MAX_REQUEST_BYTES must be a positive integer") from err
         return cls(
             database_url=database_url,
             app_base_url=os.environ.get("APP_BASE_URL", "http://127.0.0.1:8080"),
@@ -65,4 +136,7 @@ class Settings:
             crm_mode=os.environ.get("CRM_MODE", "mock"),
             crm_base_url=os.environ.get("CRM_BASE_URL", ""),
             crm_token=os.environ.get("CRM_TOKEN", ""),
+            allowed_origins=_split_csv(allowed_raw) if allowed_raw else (),
+            max_request_bytes=max_bytes,
+            trusted_proxies=_split_csv(os.environ.get("TRUSTED_PROXIES", "")),
         )
