@@ -39,13 +39,13 @@ signed off here.
 - Unknown operations stay readback-first: the readback applies the same
   advanced-version patch before the operation is recorded reconciled, and a
   patch failure leaves the operation unresolved.
-- Content deduplication: the stored content fingerprint keeps its contract
-  definition over the full canonical payload. Deduplication additionally
-  matches on enquiry content alone (email, postcode, service, collapsed
-  message, preferred contact), so a resubmission within the 600s window with
-  new valid phone/name deduplicates the enquiry, still updates the contact
-  and advances its version under the per-email lock, and rearms the stable
-  sync job when it lags.
+- Content deduplication stays strict canonical-content dedup: the content
+  fingerprint is unchanged over the full canonical payload, and only an
+  identical full payload within the 600s window takes the duplicate path.
+  A resubmission with changed first_name/last_name/phone is a new enquiry
+  under that fingerprint; it updates the contact to the new version, and
+  its prepare step rearms the stable sync job for the CRM patch. There is
+  no content-only dedup.
 - Sync finalization serializes against intake on the same per-email advisory
   lock intake holds for the contact update, so a version committed mid-sync is
   either seen by the finalization (which rearms the stable job) or rearmed by
