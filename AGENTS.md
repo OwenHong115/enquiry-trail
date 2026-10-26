@@ -117,7 +117,7 @@ P1a (this branch) delivers the HTTP CRM adapter and provider simulator. Still mi
 | P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | locally complete on fix/p0-closeout; merge/CI gate in docs/closeout-review.md |
 | P1a HTTP CRM adapter + provider simulator | implemented on feat/crm-http-adapter (stacked on P0 until P0 merges); PR 2 |
 | P1b persistent worker, heartbeat, seed, Compose | worker runtime, seed, API entrypoint, Dockerfiles and Compose implemented on feat/p1b-persistent-worker (P1b-1/P1b-2, locally verified; see docs/development-plan.md) |
-| P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | planned (P2) |
+| P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | A32 contact-version coordination implemented on feat/p2-contact-version (remote field updates proven by integration tests; acceptance remains operator-signed); lists, A33, owner actions, integration status, worker health planned (P2) |
 | S9 UI, delivery | UI planned (P4); connected verification/handover P7; still missing |
 
 Deferred acceptance items: A13, A18, A19, A20, A22, A23, A26, A27, A29, A30, A32, A33.

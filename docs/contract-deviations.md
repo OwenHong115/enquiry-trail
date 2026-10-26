@@ -22,6 +22,37 @@ signed off here.
   iterations. Existing hashes retain their stored work factor and remain verifiable;
   automatic rehash-on-login is not implemented in this slice.
 
+## A32 contact-version coordination (decision, 2026-10-26)
+
+- Field-merge policy for the app-owned fields firstname/lastname/phone (email is
+  identity, never patched): at the baseline version a pre-existing remote contact
+  is adopted as-is — blank remote fields are filled, differing non-blank remote
+  values are preserved and recorded as masked `crm.field_preserved` events. When
+  the local contact version has advanced beyond the version already synced,
+  changed app-owned fields are sent with `ContactFieldPatch` and overwrite the
+  remote values; patched fields record no preservation event.
+- A required overwrite that cannot be applied (provider does not support patch,
+  or the patch call fails) never advances `crm_links.synced_contact_version`:
+  the failure is recorded through the job failure path (retry, blocked or dead
+  by error code), so the enquiry does not report ready/synced for that version.
+  `crm.synced` and the link record only the version actually applied.
+- Unknown operations stay readback-first: the readback applies the same
+  advanced-version patch before the operation is recorded reconciled, and a
+  patch failure leaves the operation unresolved.
+- Content deduplication: the stored content fingerprint keeps its contract
+  definition over the full canonical payload. Deduplication additionally
+  matches on enquiry content alone (email, postcode, service, collapsed
+  message, preferred contact), so a resubmission within the 600s window with
+  new valid phone/name deduplicates the enquiry, still updates the contact
+  and advances its version under the per-email lock, and rearms the stable
+  sync job when it lags.
+- Sync finalization serializes against intake on the same per-email advisory
+  lock intake holds for the contact update, so a version committed mid-sync is
+  either seen by the finalization (which rearms the stable job) or rearmed by
+  the later prepare step. No duplicate CRM create results in either ordering.
+- This records the local decision only; A32 acceptance remains the operator's
+  record in docs/acceptance-log.md and is not signed off here.
+
 ## Delivery boundaries (not implemented features)
 
 - Adapter and simulator exist (P1a); no persistent worker loop,
