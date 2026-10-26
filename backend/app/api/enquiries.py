@@ -1,22 +1,32 @@
-"""Enquiry read route and the shared enquiry-detail builder."""
+"""Enquiry read routes and the shared enquiry-detail builder."""
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.auth import COOKIE_NAME
+from app.api.deps import require_authenticated
 from app.api.display import format_display_no
 from app.api.errors import ApiError, ErrorEnvelope
 from app.db import enquiry_repo, health_repo
 from app.db.session import get_session
 from app.security import sessions as session_service
+from app.services.read_model import (
+    DetailStatus,
+    InvalidCursor,
+    decode_cursor,
+    encode_cursor,
+    map_detail_status,
+)
+from app.services import read_model
+
+__all__ = ["DetailStatus", "map_detail_status"]
 
 router = APIRouter(prefix="/api/v1/enquiries", tags=["enquiries"])
 
@@ -124,6 +134,26 @@ class EnquiryDetailOut(BaseModel):
     related_jobs: list[RelatedJobOut]
 
 
+class EnquiryListItemOut(BaseModel):
+    """Strict subset of the detail fields (see contract-deviations)."""
+
+    id: uuid.UUID
+    display_no: str
+    received_at: datetime
+    service_type: str
+    processing_summary: ProcessingSummary
+    attention: Attention
+    crm_status: CrmStatus
+    next_attempt_at: datetime | None
+    owner: OwnerOut | None
+    contact: ContactOut
+
+
+class EnquiryListOut(BaseModel):
+    items: list[EnquiryListItemOut]
+    next_cursor: str | None
+
+
 def task_out_from_row(task_row) -> TaskOut:
     """Shape a TaskOut from a task row joined with its owner."""
     return TaskOut(
@@ -141,93 +171,6 @@ def task_out_from_row(task_row) -> TaskOut:
         completed_at=task_row.completed_at,
         cancelled_at=task_row.cancelled_at,
         version=task_row.version,
-    )
-
-
-@dataclass(frozen=True)
-class DetailStatus:
-    """The four published status fields, as one mapped unit."""
-
-    processing_summary: ProcessingSummary
-    attention: Attention
-    crm_status: CrmStatus
-    next_attempt_at: datetime | None
-
-
-# Internal sync-job state -> (summary, attention, crm.status).
-# The "succeeded" row is handled separately below because its
-# summary depends on prepared-and-synced.
-_SYNC_STATE_MAP: dict[str | None, tuple[str, str, str]] = {
-    None: ("processing", "none", "pending"),
-    "pending": ("processing", "none", "pending"),
-    "running": ("processing", "none", "syncing"),
-    "waiting_retry": ("waiting_retry", "retry_scheduled", "waiting_retry"),
-    "reconciling": ("reconciling", "none", "reconciling"),
-    "blocked": ("blocked", "integration_blocked", "blocked"),
-    "dead": ("failed", "intervention_required", "failed"),
-}
-
-
-def map_detail_status(
-    *,
-    sync_state: str | None,
-    provider_blocked: bool,
-    prepare_dead: bool,
-    requires_review: bool,
-    prepared_and_synced: bool,
-    sync_next_attempt_at: datetime | None,
-) -> DetailStatus:
-    """Map internal state to the published detail statuses.
-
-    The single place this mapping exists: build_enquiry_detail
-    contains no state conditionals of its own. An unmapped sync
-    state raises, so a new internal state can never leak through
-    as a public status.
-    """
-    if prepared_and_synced:
-        summary, attention, crm_status = "ready", "none", "synced"
-    elif sync_state == "succeeded":
-        summary, attention, crm_status = (
-            "ready" if prepared_and_synced else "processing",
-            "none",
-            "synced",
-        )
-    elif sync_state in _SYNC_STATE_MAP:
-        summary, attention, crm_status = _SYNC_STATE_MAP[sync_state]
-    else:
-        raise ValueError(f"unmapped sync job state: {sync_state!r}")
-
-    # next_attempt_at is published ONLY for waiting_retry.
-    next_attempt_at = (
-        sync_next_attempt_at if sync_state == "waiting_retry" and not prepared_and_synced else None
-    )
-
-    # A pending review overrides only a base attention of "none":
-    # it is never hidden by ready or processing, and never masks
-    # integration_blocked, intervention_required or
-    # retry_scheduled.
-    if requires_review and attention == "none":
-        attention = "review_required"
-
-    # A blocked provider forces integration_blocked, and the
-    # blocked summary when the job itself is blocked or absent.
-    if provider_blocked and not prepared_and_synced and summary != "failed":
-        attention = "integration_blocked"
-        if sync_state in (None, "blocked"):
-            summary = "blocked"
-
-    # local_prepare_dead: this enquiry's own prepare job died, so
-    # the summary is failed and the attention is an intervention;
-    # crm fields still come from the sync row (or pending/null).
-    if prepare_dead:
-        summary = "failed"
-        attention = "intervention_required"
-
-    return DetailStatus(
-        processing_summary=summary,  # type: ignore[arg-type]
-        attention=attention,  # type: ignore[arg-type]
-        crm_status=crm_status,  # type: ignore[arg-type]
-        next_attempt_at=next_attempt_at,
     )
 
 
@@ -256,8 +199,8 @@ def build_enquiry_detail(
         and link.synced_contact_version >= detail.required_contact_version
     )
 
-    # Every published status comes from the one mapping; this
-    # builder only assembles rows and mapped values.
+    # Every published status comes from the shared read model;
+    # this builder only assembles rows and mapped values.
     status = map_detail_status(
         sync_state=job.state if job is not None else None,
         provider_blocked=health is not None and health.status == "blocked",
@@ -271,7 +214,7 @@ def build_enquiry_detail(
 
     if link is None:
         crm = CrmOut(
-            status=status.crm_status,
+            status=status.crm_status,  # type: ignore[arg-type]
             remote_id=None,
             remote_url=None,
             synced_contact_version=0,
@@ -281,7 +224,7 @@ def build_enquiry_detail(
         )
     else:
         crm = CrmOut(
-            status=status.crm_status,
+            status=status.crm_status,  # type: ignore[arg-type]
             remote_id=link.remote_id,
             remote_url=None,
             synced_contact_version=link.synced_contact_version,
@@ -313,8 +256,8 @@ def build_enquiry_detail(
             if detail.owner_id is not None
             else None
         ),
-        processing_summary=processing_summary,
-        attention=attention,
+        processing_summary=processing_summary,  # type: ignore[arg-type]
+        attention=attention,  # type: ignore[arg-type]
         requires_review=detail.requires_review,
         crm=crm,
         received_at=detail.received_at,
@@ -338,6 +281,78 @@ def build_enquiry_detail(
                                    updated_at=row.updated_at)
                       for row in enquiry_repo.get_related_jobs(
                           session, enquiry_id, detail.contact_id)],
+    )
+
+
+def _decode_or_422(cursor: str | None):
+    if cursor is None:
+        return None
+    try:
+        return decode_cursor(cursor)
+    except InvalidCursor as err:
+        raise ApiError(
+            422, "validation_failed", "Invalid cursor",
+            field_errors=[{"path": "cursor", "message": "invalid cursor"}],
+        ) from err
+
+
+@router.get(
+    "",
+    response_model=EnquiryListOut,
+    responses={401: {"model": ErrorEnvelope}, 422: {"model": ErrorEnvelope}},
+)
+def list_enquiries_route(
+    request: Request,
+    session: Session = Depends(get_session),
+    limit: int = Query(default=25, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+    processing_summary: ProcessingSummary | None = Query(default=None),
+    attention: Attention | None = Query(default=None),
+    owner: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+):
+    require_authenticated(request, session)
+    items, next_key = read_model.list_enquiries(
+        session,
+        limit=limit,
+        cursor=_decode_or_422(cursor),
+        processing_summary=processing_summary,
+        attention=attention,
+        owner_code=owner,
+        q=q,
+    )
+    return EnquiryListOut(
+        items=[
+            EnquiryListItemOut(
+                id=item.id,
+                display_no=format_display_no(item.display_no),
+                received_at=item.received_at,
+                service_type=item.service_type,
+                processing_summary=item.status.processing_summary,  # type: ignore[arg-type]
+                attention=item.status.attention,  # type: ignore[arg-type]
+                crm_status=item.status.crm_status,  # type: ignore[arg-type]
+                next_attempt_at=item.status.next_attempt_at,
+                owner=(
+                    OwnerOut(
+                        id=item.owner.owner_id,
+                        code=item.owner.owner_code,
+                        display_name=item.owner.owner_display_name,
+                    )
+                    if item.owner.owner_id is not None
+                    else None
+                ),
+                contact=ContactOut(
+                    id=item.contact.contact_id,
+                    email=item.contact.email_norm,
+                    first_name=item.contact.first_name,
+                    last_name=item.contact.last_name,
+                    phone_e164=item.contact.phone_e164,
+                    version=item.contact.contact_version,
+                ),
+            )
+            for item in items
+        ],
+        next_cursor=encode_cursor(next_key) if next_key is not None else None,
     )
 
 

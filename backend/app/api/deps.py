@@ -10,6 +10,16 @@ from app.api.errors import ApiError
 from app.security import sessions as session_service
 
 
+def require_authenticated(request: Request, session: Session):
+    """Resolve a live session for a safe read (no CSRF needed)."""
+    cookie_token = request.cookies.get(COOKIE_NAME)
+    secret = request.app.state.settings.session_secret
+    resolved = session_service.resolve_session(session, cookie_token, secret)
+    if resolved is None:
+        raise ApiError(401, "unauthenticated", "Authentication required")
+    return resolved
+
+
 def require_operator(
     request: Request, session: Session, csrf_token: str | None
 ):
