@@ -176,6 +176,29 @@ def _lease_still_held(session: Session, claim: ClaimedJob) -> bool:
     return False
 
 
+def _rearm_if_contact_advanced(
+    session: Session, claim: ClaimedJob, clock: BusinessClock, synced_version: int
+) -> bool:
+    """Rearm the stable job when the contact moved during this sync (A32).
+
+    Called inside the fenced finalization transaction, after the
+    sync for ``synced_version`` has been recorded. True means the
+    job was returned to pending for the newer version instead of
+    being marked succeeded; the recorded link keeps the version
+    actually synced and is never downgraded.
+    """
+    current = crm_repo.get_current_contact_version(session, claim.entity_id)
+    if current is None or current <= synced_version:
+        return False
+    job_repo.rearm_sync_job(
+        session,
+        claim.job_id,
+        next_attempt_at=clock.now_utc(),
+        lease_token=claim.lease_token,
+    )
+    return True
+
+
 def _record_provider_failure(
     session: Session,
     claim: ClaimedJob,
@@ -447,6 +470,19 @@ def _handle_readback(
     with session.begin():
         if not _lease_still_held(session, claim):
             return
+        if _rearm_if_contact_advanced(
+            session, claim, clock, contact.version  # type: ignore[attr-defined]
+        ):
+            crm_sync.record_readback_found(
+                session, claim, contact, operation_id, found
+            )
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="succeeded",
+            )
+            return
         crm_sync.record_readback_found(
             session, claim, contact, operation_id, found
         )
@@ -555,6 +591,19 @@ def _handle_sync_claim(
         with session.begin():
             if not _lease_still_held(session, claim):
                 return
+            if _rearm_if_contact_advanced(
+                session, claim, clock, lookup.contact.version
+            ):
+                crm_sync.record_existing_sync(
+                    session, claim, lookup.contact, found
+                )
+                job_repo.close_attempt(
+                    session,
+                    job_id=claim.job_id,
+                    attempt_no=claim.attempt_no,
+                    outcome="succeeded",
+                )
+                return
             crm_sync.record_existing_sync(
                 session, claim, lookup.contact, found
             )
@@ -593,6 +642,19 @@ def _handle_sync_claim(
     # Block 3 (commit): create outcome, link and synced event.
     with session.begin():
         if not _lease_still_held(session, claim):
+            return
+        if _rearm_if_contact_advanced(
+            session, claim, clock, lookup.contact.version
+        ):
+            crm_sync.record_create_success(
+                session, claim, lookup.contact, lookup.operation_id, created
+            )
+            job_repo.close_attempt(
+                session,
+                job_id=claim.job_id,
+                attempt_no=claim.attempt_no,
+                outcome="succeeded",
+            )
             return
         crm_sync.record_create_success(
             session, claim, lookup.contact, lookup.operation_id, created

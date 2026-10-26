@@ -251,7 +251,8 @@ def _submit_intake_once(
         # write itself is a single atomic INSERT ... ON CONFLICT
         # DO NOTHING, so there is no read-then-insert window even
         # for a writer that ignores the advisory lock; a returning
-        # customer's row (and version) comes back unchanged.
+        # customer's row is updated under this lock when new valid
+        # phone/name data arrives, advancing its version (A32).
         intake_repo.take_email_lock(session, email)
         contact_id, contact_version, contact_inserted = (
             intake_repo.insert_contact(

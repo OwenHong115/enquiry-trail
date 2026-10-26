@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,20 @@ def get_enquiry_contact(session: Session, enquiry_id: uuid.UUID) -> Any | None:
     ).one_or_none()
 
 
+def get_current_contact_version(
+    session: Session, enquiry_id: uuid.UUID
+) -> int | None:
+    """Current committed contact version for an enquiry's contact."""
+    return session.execute(
+        select(tables.contacts.c.version)
+        .join(
+            tables.enquiries,
+            tables.enquiries.c.contact_id == tables.contacts.c.id,
+        )
+        .where(tables.enquiries.c.id == enquiry_id)
+    ).scalar_one_or_none()
+
+
 def upsert_crm_link(
     session: Session,
     *,
@@ -52,7 +66,11 @@ def upsert_crm_link(
             set_={
                 "remote_id": remote_id,
                 "sync_status": "synced",
-                "synced_contact_version": synced_contact_version,
+                # Never downgrade a link already synced further (A32).
+                "synced_contact_version": func.greatest(
+                    tables.crm_links.c.synced_contact_version,
+                    synced_contact_version,
+                ),
                 "last_synced_at": text("clock_timestamp()"),
             },
         )

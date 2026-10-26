@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, insert, select, text
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -156,12 +156,16 @@ def insert_contact(
     last_name: str | None,
     phone_e164: str | None,
 ) -> tuple[uuid.UUID, int, bool]:
-    """Insert the contact atomically, or return the existing row.
+    """Insert the contact, or update it when new valid data arrives (A32).
 
     A single INSERT ... ON CONFLICT (email_norm) DO NOTHING: when
     it returns a row this call inserted the contact; when it
     returns none, the email already exists and the row is read
-    back unchanged (its version is never bumped here).
+    back: a differing name, or a provided differing last name/phone,
+    updates the stored data and advances the version by one.
+    Identical data and omitted (None) fields leave the row and its
+    version unchanged. The caller holds the per-email advisory
+    lock, so this read-compare-update is serialised per email.
     """
     stmt = (
         pg_insert(tables.contacts)
@@ -177,10 +181,33 @@ def insert_contact(
     row = session.execute(stmt).one_or_none()
     if row is not None:
         return row.id, row.version, True
-    existing = get_contact_by_email(session, email_norm)
+    existing = session.execute(
+        select(
+            tables.contacts.c.id,
+            tables.contacts.c.first_name,
+            tables.contacts.c.last_name,
+            tables.contacts.c.phone_e164,
+            tables.contacts.c.version,
+        ).where(tables.contacts.c.email_norm == email_norm)
+    ).one_or_none()
     if existing is None:  # pragma: no cover - conflict implies a row
         raise RuntimeError(f"contact conflict without a row: {email_norm}")
-    return existing[0], existing[1], False
+    updates: dict[str, str] = {}
+    if first_name != existing.first_name:
+        updates["first_name"] = first_name
+    if last_name is not None and last_name != existing.last_name:
+        updates["last_name"] = last_name
+    if phone_e164 is not None and phone_e164 != existing.phone_e164:
+        updates["phone_e164"] = phone_e164
+    if not updates:
+        return existing.id, existing.version, False
+    new_version = session.execute(
+        update(tables.contacts)
+        .where(tables.contacts.c.id == existing.id)
+        .values(**updates, version=tables.contacts.c.version + 1)
+        .returning(tables.contacts.c.version)
+    ).scalar_one()
+    return existing.id, new_version, False
 
 
 def insert_enquiry(
