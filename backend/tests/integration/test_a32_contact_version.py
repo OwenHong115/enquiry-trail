@@ -10,6 +10,7 @@ picked up by the same job with no duplicate CRM create.
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -18,7 +19,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.ports.crm import ProviderError
-from app.services import intake
+from app.services import crm_sync, intake
 from app.worker.claiming import claim_next, handle_claim
 from support.fake_clock import FakeClock
 from support.fake_crm import FakeCrm
@@ -50,8 +51,8 @@ def _payload(**overrides: object) -> dict:
 
 def _v2_payload() -> dict:
     return _payload(
-        first_name="Alicia", phone="+61487654321", message=MSG2,
-        service_type="kitchen",
+        first_name="Alicia", last_name="Morgans", phone="+61487654321",
+        message=MSG2, service_type="kitchen",
     )
 
 
@@ -119,6 +120,18 @@ def _sync_job(postgres_db: str):
     return rows[0]
 
 
+def _assert_remote_v2(fake: FakeCrm) -> None:
+    remote = fake.remote_by_email["alex.demo@example.com"]
+    assert remote.firstname == "Alicia"
+    assert remote.lastname == "Morgans"
+    assert remote.phone == "+61487654321"
+    assert len(fake.calls_of("patch_contact")) == 1
+    patch = fake.calls_of("patch_contact")[0]
+    assert patch.fields["firstname"] == "Alicia"
+    assert patch.fields["lastname"] == "Morgans"
+    assert patch.fields["phone"] == "+61487654321"
+
+
 def _link(postgres_db: str, contact_id):
     return _fetch(
         postgres_db,
@@ -157,7 +170,8 @@ def test_a32_same_email_new_phone_name_updates_contact_and_version(
     clock.advance_by(3600)
     third = _submit(
         postgres_db, _payload(
-            first_name="Alicia", phone="+61487654321", message=MSG3,
+            first_name="Alicia", last_name="Morgans",
+            phone="+61487654321", message=MSG3,
             service_type="kitchen",
         ), clock,
     )
@@ -206,6 +220,7 @@ def test_a32_rearmed_sync_job_and_older_enquiry_stays_ready(
     _run_next(postgres_db, clock, fake, "sync_contact")
     assert len(fake.calls_of("create_contact")) == 1
     assert fake.remote_contact_count == 1
+    _assert_remote_v2(fake)
     contact = _contact(postgres_db)
     assert _link(postgres_db, contact.id).synced_contact_version == 2
     assert _sync_job(postgres_db).state == "succeeded"
@@ -241,6 +256,7 @@ def test_a32_unknown_operation_remains_readback_first_after_update(
 
     assert len(fake.calls_of("create_contact")) == 1
     assert fake.remote_contact_count == 1
+    _assert_remote_v2(fake)
     ops = _fetch(
         postgres_db, "SELECT status FROM leadops.external_operations"
     )
@@ -311,7 +327,147 @@ def test_a32_mid_sync_version_change_picked_up_without_duplicate_create(
     _run_next(postgres_db, clock, fake, "prepare_enquiry")
     assert len(fake.calls_of("create_contact")) == 1
     assert fake.remote_contact_count == 1
+    _assert_remote_v2(fake)
     assert _link(postgres_db, contact.id).synced_contact_version == 2
     assert _sync_job(postgres_db).state == "succeeded"
+    assert _detail(api_client, first.enquiry_id)["processing_summary"] == "ready"
+    assert _detail(api_client, second.enquiry_id)["processing_summary"] == "ready"
+
+
+def test_a32_content_duplicate_still_updates_contact_and_rearms(
+    api_client: TestClient, postgres_db: str
+) -> None:
+    clock = FakeClock(T0)
+    fake = FakeCrm()
+    first = _submit(postgres_db, _payload(), clock)
+    _run_next(postgres_db, clock, fake, "prepare_enquiry")
+    _run_next(postgres_db, clock, fake, "sync_contact")
+    assert _sync_job(postgres_db).state == "succeeded"
+
+    # Same enquiry content within 600s, but new valid contact data:
+    # the enquiry deduplicates, the contact data must not be dropped.
+    clock.advance_by(300)
+    duplicate = _submit(
+        postgres_db,
+        _payload(first_name="Alicia", last_name="Morgans",
+                 phone="+61487654321"),
+        clock,
+    )
+    assert duplicate.enquiry_id == first.enquiry_id
+    assert duplicate.deduplication == "content_duplicate"
+    enquiries = _fetch(postgres_db, "SELECT count(*) AS n FROM leadops.enquiries")
+    assert enquiries[0].n == 1
+    contact = _contact(postgres_db)
+    assert contact.first_name == "Alicia"
+    assert contact.last_name == "Morgans"
+    assert contact.phone_e164 == "+61487654321"
+    assert contact.version == 2
+    assert _sync_job(postgres_db).state == "pending"
+
+    _run_next(postgres_db, clock, fake, "sync_contact")
+    assert len(fake.calls_of("create_contact")) == 1
+    _assert_remote_v2(fake)
+    assert _link(postgres_db, contact.id).synced_contact_version == 2
+    assert _detail(api_client, first.enquiry_id)["processing_summary"] == "ready"
+
+
+def test_a32_unsupported_patch_does_not_advance_link(
+    api_client: TestClient, postgres_db: str
+) -> None:
+    clock = FakeClock(T0)
+    fake = FakeCrm()
+    first = _submit(postgres_db, _payload(), clock)
+    _run_next(postgres_db, clock, fake, "prepare_enquiry")
+    _run_next(postgres_db, clock, fake, "sync_contact")
+    contact = _contact(postgres_db)
+    assert _link(postgres_db, contact.id).synced_contact_version == 1
+
+    clock.advance_by(3600)
+    second = _submit(postgres_db, _v2_payload(), clock)
+    _run_next(postgres_db, clock, fake, "prepare_enquiry")
+    fake.patch_supported = False
+    _run_next(postgres_db, clock, fake, "sync_contact")
+
+    assert fake.remote_by_email["alex.demo@example.com"].firstname == "Alex"
+    assert _link(postgres_db, contact.id).synced_contact_version == 1
+    assert _sync_job(postgres_db).state != "succeeded"
+    detail = _detail(api_client, second.enquiry_id)
+    assert detail["processing_summary"] != "ready"
+    assert detail["crm"]["synced_contact_version"] == 1
+
+
+def test_a32_finalization_serializes_against_intake_update(
+    api_client: TestClient, postgres_db: str, monkeypatch
+) -> None:
+    clock = FakeClock(T0)
+    fake = FakeCrm()
+    first = _submit(postgres_db, _payload(), clock)
+    _run_next(postgres_db, clock, fake, "prepare_enquiry")
+
+    session = _factory(postgres_db)()
+    try:
+        claim = claim_next(session, WORKER, clock)
+    finally:
+        session.close()
+    assert claim is not None and claim.kind == "sync_contact"
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_record = crm_sync.record_create_success
+
+    def paused_record(session_, claim_, contact_, operation_id_, created_):
+        entered.set()
+        assert release.wait(timeout=15)
+        return original_record(session_, claim_, contact_, operation_id_, created_)
+
+    monkeypatch.setattr(crm_sync, "record_create_success", paused_record)
+    worker_errors: list[BaseException] = []
+
+    def run_claim() -> None:
+        thread_session = _factory(postgres_db)()
+        try:
+            handle_claim(thread_session, claim, clock, crm=fake)
+        except BaseException as exc:
+            worker_errors.append(exc)
+        finally:
+            thread_session.close()
+
+    worker = threading.Thread(target=run_claim)
+    worker.start()
+    assert entered.wait(timeout=15)
+
+    intake_done = threading.Event()
+    intake_outcome: dict = {}
+
+    def run_intake() -> None:
+        try:
+            intake_outcome["result"] = _submit(postgres_db, _v2_payload(), clock)
+        except BaseException as exc:
+            intake_outcome["error"] = exc
+        finally:
+            intake_done.set()
+
+    intake_thread = threading.Thread(target=run_intake)
+    intake_thread.start()
+    time.sleep(0.5)
+    # Finalization already read v1 and holds its serialization point:
+    # the intake update may not commit underneath it.
+    assert not intake_done.is_set(), "intake committed during sync finalization"
+    assert _contact(postgres_db).version == 1
+    release.set()
+    worker.join(timeout=20)
+    intake_thread.join(timeout=20)
+    assert not worker.is_alive() and not intake_thread.is_alive()
+    assert worker_errors == [], f"worker errors: {worker_errors!r}"
+    assert "error" not in intake_outcome, intake_outcome.get("error")
+    second = intake_outcome["result"]
+    assert _contact(postgres_db).version == 2
+
+    _run_next(postgres_db, clock, fake, "prepare_enquiry")
+    _run_next(postgres_db, clock, fake, "sync_contact")
+    assert len(fake.calls_of("create_contact")) == 1
+    _assert_remote_v2(fake)
+    contact = _contact(postgres_db)
+    assert _link(postgres_db, contact.id).synced_contact_version == 2
     assert _detail(api_client, first.enquiry_id)["processing_summary"] == "ready"
     assert _detail(api_client, second.enquiry_id)["processing_summary"] == "ready"
