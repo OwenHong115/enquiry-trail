@@ -14,7 +14,7 @@ from app.api.auth import COOKIE_NAME
 from app.api.deps import require_authenticated, require_operator
 from app.api.display import format_display_no
 from app.api.errors import ApiError, ErrorEnvelope
-from app.db import draft_repo, enquiry_repo, health_repo
+from app.db import draft_repo, enquiry_repo, enrichment_repo, health_repo
 from app.db.session import get_session
 from app.security import sessions as session_service
 from app.services import drafts, owner, read_model
@@ -286,6 +286,23 @@ def build_enquiry_detail(
 
     task = task_out_from_row(task_row) if task_row is not None else None
 
+    enrichment_row = enrichment_repo.get_enrichment(session, enquiry_id)
+    if enrichment_row is None:
+        enrichment = None
+    else:
+        result = enrichment_row.result_json or {}
+        enrichment = {
+            "status": enrichment_row.status,
+            "budget": result.get("budget"),
+            "timeframe": result.get("timeframe"),
+            "evidence": result.get("evidence"),
+            "provider": enrichment_row.provider,
+            "model": enrichment_row.model,
+            "prompt_version": enrichment_row.prompt_version,
+            "parameters_snapshot": enrichment_row.parameters_snapshot,
+            "last_error_code": enrichment_row.last_error_code,
+        }
+
     return EnquiryDetailOut(
         id=detail.id,
         display_no=format_display_no(detail.display_no),
@@ -322,7 +339,7 @@ def build_enquiry_detail(
         review_reason_codes=detail.review_reason_codes,
         review_resolution_note=detail.resolution_note,
         task=task,
-        enrichment=None,
+        enrichment=enrichment,
         draft=_draft_out(session, enquiry_id),
         notification=NotificationOut(
             status="disabled", notification_id=None, last_error_code=None

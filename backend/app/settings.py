@@ -60,12 +60,21 @@ class Settings:
     rate_limit_window_seconds: int = 60
     webhook_secret: str = ""
     webhook_replay_window_seconds: int = 300
+    extractor_mode: str = "fixture"
+    extractor_model: str = "fixture-model"
+    extractor_prompt_version: str = "v1"
 
     def __post_init__(self) -> None:
         # Fail fast: an empty secret makes CSRF tokens computable
         # by anyone, so the app must not boot without a real one.
         if not self.session_secret.strip():
             raise ValueError("SESSION_SECRET must not be empty")
+        if self.extractor_mode not in ("fixture", "template", "connected"):
+            raise ValueError("EXTRACTOR_MODE must be fixture, template or connected")
+        if not self.extractor_prompt_version.strip():
+            raise ValueError("EXTRACTOR_PROMPT_VERSION must not be empty")
+        if self.extractor_mode == "connected" and not self.extractor_model.strip():
+            raise ValueError("EXTRACTOR_MODEL is required in connected mode")
         if self.crm_mode not in ("mock", "http"):
             raise ValueError("CRM_MODE must be mock or http")
         # In http mode missing config fails startup; never fall back.
@@ -169,4 +178,7 @@ class Settings:
             rate_limit_window_seconds=int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60")),
             webhook_secret=os.environ.get("WEBHOOK_SECRET", ""),
             webhook_replay_window_seconds=int(os.environ.get("WEBHOOK_REPLAY_WINDOW_SECONDS", "300")),
+            extractor_mode=os.environ.get("EXTRACTOR_MODE", "fixture"),
+            extractor_model=os.environ.get("EXTRACTOR_MODEL", "fixture-model"),
+            extractor_prompt_version=os.environ.get("EXTRACTOR_PROMPT_VERSION", "v1"),
         )

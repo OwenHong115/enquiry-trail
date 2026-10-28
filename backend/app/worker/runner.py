@@ -30,6 +30,8 @@ from app.ports.crm import CrmPort, ProviderError
 from app.ports.scheduler import Scheduler
 from app.services.clock import SystemBusinessClock
 from app.settings import Settings
+from app.ports.extraction import ExtractorPort
+from app.services import extraction as extraction_service
 from app.worker.claiming import claim_next, handle_claim
 
 _LEASE_SECONDS = 60
@@ -79,6 +81,8 @@ def run_once(
     scheduler: Scheduler | None = None,
     heartbeat_interval_seconds: float = 5.0,
     claim_observer: Callable[[bool], None] | None = None,
+    extractor: ExtractorPort | None = None,
+    extraction_profile: extraction_service.ExtractionProfile | None = None,
 ) -> bool:
     """Claim and handle at most one due job (True when one was handled).
 
@@ -103,7 +107,7 @@ def run_once(
         )
         heartbeat_thread.start()
     try:
-        handle_claim(session, claim, clock, crm=crm, scheduler=scheduler)
+        handle_claim(session, claim, clock, crm=crm, scheduler=scheduler, extractor=extractor, extraction_profile=extraction_profile)
     except Exception as err:
         session.rollback()
         log_event(
@@ -141,6 +145,8 @@ def run_until_idle(
     scheduler: Scheduler | None = None,
     max_iterations: int | None = None,
     heartbeat_interval_seconds: float = 5.0,
+    extractor: ExtractorPort | None = None,
+    extraction_profile: extraction_service.ExtractionProfile | None = None,
 ) -> int:
     """Run jobs until none is due; return how many were handled."""
     handled = 0
@@ -148,7 +154,8 @@ def run_until_idle(
         session = session_factory()
         try:
             if not run_once(session, worker_id, clock, crm, scheduler,
-                            heartbeat_interval_seconds=heartbeat_interval_seconds):
+                            heartbeat_interval_seconds=heartbeat_interval_seconds,
+                            extractor=extractor, extraction_profile=extraction_profile):
                 break
         finally:
             session.close()
@@ -196,6 +203,8 @@ def run_forever(
     error_backoff_seconds: float = 1.0,
     stop_event: threading.Event | None = None,
     heartbeat_interval_seconds: float | None = None,
+    extractor: ExtractorPort | None = None,
+    extraction_profile: extraction_service.ExtractionProfile | None = None,
 ) -> int:
     """Run persistently until stop_event is set; return jobs handled.
 
@@ -250,7 +259,9 @@ def run_forever(
                 session = session_factory()
                 did = run_once(session, worker_id, clock, crm, scheduler,
                                heartbeat_interval_seconds=job_heartbeat,
-                               claim_observer=_set_active)
+                               claim_observer=_set_active,
+                               extractor=extractor,
+                               extraction_profile=extraction_profile)
                 if did:
                     with lock:
                         handled[0] += 1
@@ -330,6 +341,33 @@ def _resolve_crm(settings: Settings | None = None) -> CrmPort:
     )
 
 
+def _resolve_extractor(settings: Settings | None = None) -> ExtractorPort:
+    """Resolve the extractor from settings; connected never falls back."""
+    from app.adapters.extraction_fixture import FixtureExtractor
+    from app.adapters.extraction_template import TemplateExtractor
+
+    settings = settings or Settings.from_env()
+    if settings.extractor_mode == "fixture":
+        return FixtureExtractor()
+    if settings.extractor_mode == "template":
+        return TemplateExtractor()
+    raise RuntimeError(
+        "connected extraction is gated on the live-extraction finding; "
+        "no live extractor is available in this build"
+    )
+
+
+def _extraction_profile(settings: Settings) -> extraction_service.ExtractionProfile:
+    provider = {"fixture": "fixture", "template": "template",
+                "connected": "connected"}[settings.extractor_mode]
+    return extraction_service.ExtractionProfile(
+        mode=settings.extractor_mode, provider=provider,
+        model=settings.extractor_model,
+        prompt_version=settings.extractor_prompt_version,
+        parameters={},
+    )
+
+
 def main() -> None:
     """Console-script entrypoint: persistent worker until signalled."""
     configure_logging()
@@ -337,6 +375,8 @@ def main() -> None:
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
     crm = _resolve_crm(settings)
+    extractor = _resolve_extractor(settings)
+    extraction_profile = _extraction_profile(settings)
     stop_event = threading.Event()
 
     def _signal_handler(signum, frame):  # pragma: no cover - process level
@@ -362,6 +402,7 @@ def main() -> None:
             shutdown_timeout_seconds=settings.worker_shutdown_timeout_seconds,
             error_backoff_seconds=settings.worker_error_backoff_seconds,
             stop_event=stop_event,
+            extractor=extractor, extraction_profile=extraction_profile,
         )
     except WorkerUncleanShutdown:
         # Slots may still be alive: do not close the adapter or

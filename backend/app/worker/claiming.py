@@ -21,7 +21,9 @@ from app.ports.crm import (
     ProviderError,
 )
 from app.ports.scheduler import Scheduler
+from app.ports.extraction import ExtractorPort
 from app.services import crm_sync, health
+from app.services import extraction as extraction_service
 from app.services.scheduler import BackoffScheduler
 
 # The retryable-before-write set for this slice, and the worker
@@ -700,6 +702,8 @@ def handle_claim(
     clock: BusinessClock,
     crm: CrmPort | None = None,
     scheduler: Scheduler | None = None,
+    extractor: ExtractorPort | None = None,
+    extraction_profile: extraction_service.ExtractionProfile | None = None,
 ) -> None:
     """Execute one claimed job.
 
@@ -734,6 +738,12 @@ def handle_claim(
                 owner_id=prepared.owner_id,
                 routing_reason=prepared.routing_reason,
             )
+            if extractor is not None:
+                profile = extraction_profile or extraction_service.ExtractionProfile()
+                with session.begin_nested():
+                    extraction_service.extract_and_persist(
+                        session, claim.entity_id, extractor, profile
+                    )
             job_repo.insert_sync_job(
                 session,
                 enquiry_id=claim.entity_id,
