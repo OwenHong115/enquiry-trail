@@ -15,7 +15,7 @@ describe("Demo page", () => {
       return new Response("{}", { status: 404 });
     }));
     render(<DemoPage />);
-    await waitFor(() => expect(screen.getByText("demo-crash")).toBeTruthy());
-    expect(screen.getByText(/inconclusive/i)).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("demo-crash").length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/inconclusive/i).length).toBeGreaterThan(0);
   });
 });
