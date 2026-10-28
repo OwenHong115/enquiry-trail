@@ -222,3 +222,26 @@ worker_heartbeats = Table(
     Column("last_seen_at", DateTime(timezone=True), nullable=False),
     Column("active_job_count", Integer, nullable=False),
 )
+
+enquiry_drafts = Table(
+    "enquiry_drafts",
+    metadata,
+    Column("enquiry_id", Uuid, primary_key=True),
+    Column("subject", String(200), nullable=False),
+    Column("body", String(3000), nullable=False),
+    Column("draft_version", Integer, nullable=False),
+    Column("updated_by", Uuid),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+draft_edits = Table(
+    "draft_edits",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("enquiry_id", Uuid, nullable=False),
+    Column("draft_version", Integer, nullable=False),
+    Column("subject", String(200), nullable=False),
+    Column("body", String(3000), nullable=False),
+    Column("operator_id", Uuid),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
