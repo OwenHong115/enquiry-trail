@@ -70,7 +70,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return response
 
-    app.add_middleware(IngressMiddleware, settings=settings)
+    app.add_middleware(
+        IngressMiddleware, settings=settings, session_factory=app.state.session_factory
+    )
 
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError):

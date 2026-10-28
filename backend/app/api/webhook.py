@@ -79,17 +79,6 @@ async def webhook_intake(
     if abs((now - delivered_at).total_seconds()) > settings.webhook_replay_window_seconds:
         raise ApiError(401, "webhook_signature_invalid", "Webhook signature is invalid")
 
-    # Replay check, separate from intake idempotency: the signature
-    # itself may be delivered only once, whatever event key it carries.
-    assert signature is not None
-    if not ratelimit.claim_webhook_signature(
-        session,
-        signature=signature,
-        timestamp=ts,
-        replay_window_seconds=settings.webhook_replay_window_seconds,
-    ):
-        raise ApiError(409, "webhook_replay", "Webhook delivery was already accepted")
-
     try:
         payload = IntakeDataIn.model_validate(json.loads(body))
     except (ValueError, ValidationError) as err:
@@ -114,6 +103,20 @@ async def webhook_intake(
             422, "validation_failed", "Request validation failed",
             field_errors=[{"path": "phone", "message": str(err)}],
         ) from err
+
+    # Replay check, separate from intake idempotency: the signature
+    # itself may be delivered only once, whatever event key it carries.
+    # Claim it only after signature verification and payload
+    # validation succeed, so a delivery rejected with 422 does not
+    # burn its signature and can be corrected and redelivered.
+    assert signature is not None
+    if not ratelimit.claim_webhook_signature(
+        session,
+        signature=signature,
+        timestamp=ts,
+        replay_window_seconds=settings.webhook_replay_window_seconds,
+    ):
+        raise ApiError(409, "webhook_replay", "Webhook delivery was already accepted")
 
     try:
         result = submit_intake(

@@ -214,6 +214,15 @@ activity_events = Table(
     Column("scenario_run_id", Uuid),
 )
 
+worker_heartbeats = Table(
+    "worker_heartbeats",
+    metadata,
+    Column("worker_id", Uuid, primary_key=True),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    Column("active_job_count", Integer, nullable=False),
+)
+
 rate_limit_counters = Table(
     "rate_limit_counters",
     metadata,
@@ -222,13 +231,4 @@ rate_limit_counters = Table(
     Column("window_start", DateTime(timezone=True), primary_key=True),
     Column("count", Integer, nullable=False),
     Column("expires_at", DateTime(timezone=True), nullable=False),
-)
-
-worker_heartbeats = Table(
-    "worker_heartbeats",
-    metadata,
-    Column("worker_id", Uuid, primary_key=True),
-    Column("started_at", DateTime(timezone=True), nullable=False),
-    Column("last_seen_at", DateTime(timezone=True), nullable=False),
-    Column("active_job_count", Integer, nullable=False),
 )
