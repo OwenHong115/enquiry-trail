@@ -6,18 +6,20 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.api.auth import COOKIE_NAME
-from app.api.deps import require_authenticated
+from app.api.deps import require_authenticated, require_operator
 from app.api.display import format_display_no
 from app.api.errors import ApiError, ErrorEnvelope
-from app.db import enquiry_repo, health_repo
+from app.db import draft_repo, enquiry_repo, health_repo
 from app.db.session import get_session
 from app.security import sessions as session_service
-from app.services import read_model
+from app.services import drafts, owner, read_model
+from app.services.errors import EnquiryNotFound, VersionConflict
+from app.services.owner import UnknownOwner
 from app.services.read_model import (
     DetailStatus,
     InvalidCursor,
@@ -92,6 +94,15 @@ class TaskOut(BaseModel):
     version: int
 
 
+class DraftOut(BaseModel):
+    enquiry_id: uuid.UUID
+    subject: str
+    body: str
+    draft_version: int
+    updated_by: uuid.UUID | None
+    updated_at: datetime | None
+
+
 class NotificationOut(BaseModel):
     status: str
     notification_id: uuid.UUID | None
@@ -127,7 +138,7 @@ class EnquiryDetailOut(BaseModel):
     review_resolution_note: str | None
     task: TaskOut | None
     enrichment: dict | None
-    draft: dict | None
+    draft: DraftOut | None
     notification: NotificationOut
     local_prepared_at: datetime | None
     required_contact_version: int
@@ -186,6 +197,32 @@ def task_out_from_row(task_row) -> TaskOut:
         completed_at=task_row.completed_at,
         cancelled_at=task_row.cancelled_at,
         version=task_row.version,
+    )
+
+
+def _draft_out(session: Session, enquiry_id: uuid.UUID) -> DraftOut | None:
+    """The saved draft for the detail, or None when never saved."""
+    row = draft_repo.get_draft(session, enquiry_id)
+    if row is None:
+        return None
+    return DraftOut(
+        enquiry_id=row.enquiry_id,
+        subject=row.subject,
+        body=row.body,
+        draft_version=row.draft_version,
+        updated_by=row.updated_by,
+        updated_at=row.updated_at,
+    )
+
+
+def _draft_out_from_view(view: drafts.DraftView) -> DraftOut:
+    return DraftOut(
+        enquiry_id=view.enquiry_id,
+        subject=view.subject,
+        body=view.body,
+        draft_version=view.draft_version,
+        updated_by=view.updated_by,
+        updated_at=view.updated_at,
     )
 
 
@@ -286,7 +323,7 @@ def build_enquiry_detail(
         review_resolution_note=detail.resolution_note,
         task=task,
         enrichment=None,
-        draft=None,
+        draft=_draft_out(session, enquiry_id),
         notification=NotificationOut(
             status="disabled", notification_id=None, last_error_code=None
         ),
@@ -441,3 +478,149 @@ def get_enquiry(
     if detail is None:
         raise ApiError(404, "not_found", "Enquiry not found")
     return detail
+
+
+class OwnerChangeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner_code: str = Field(min_length=1, max_length=40)
+    expected_version: int = Field(ge=1)
+
+
+class DraftSaveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=3000)
+    expected_draft_version: int | None = Field(default=None, ge=0)
+
+
+@router.post(
+    "/{enquiry_id}/owner/change",
+    response_model=EnquiryDetailOut,
+    responses={
+        401: {"model": ErrorEnvelope},
+        403: {"model": ErrorEnvelope},
+        404: {"model": ErrorEnvelope},
+        409: {"model": ErrorEnvelope},
+        422: {"model": ErrorEnvelope},
+    },
+)
+@router.post(
+    "/{enquiry_id}/owner",
+    response_model=EnquiryDetailOut,
+    responses={
+        401: {"model": ErrorEnvelope},
+        403: {"model": ErrorEnvelope},
+        404: {"model": ErrorEnvelope},
+        409: {"model": ErrorEnvelope},
+        422: {"model": ErrorEnvelope},
+    },
+)
+def change_owner_route(
+    enquiry_id: uuid.UUID,
+    payload: OwnerChangeIn,
+    request: Request,
+    session: Session = Depends(get_session),
+    csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+):
+    resolved = require_operator(request, session, csrf_token)
+    session.rollback()
+    try:
+        owner.change_owner(
+            session,
+            enquiry_id,
+            new_owner_code=payload.owner_code,
+            expected_version=payload.expected_version,
+            operator_id=resolved.operator_id,
+            clock=request.app.state.clock,
+        )
+    except EnquiryNotFound as err:
+        raise ApiError(404, "not_found", "Enquiry not found") from err
+    except UnknownOwner as err:
+        raise ApiError(
+            422,
+            "validation_failed",
+            "Unknown owner",
+            field_errors=[{"path": "owner_code", "message": "unknown owner"}],
+        ) from err
+    except VersionConflict as err:
+        raise ApiError(
+            409, "version_conflict", "Enquiry version conflict"
+        ) from err
+
+    detail = build_enquiry_detail(session, enquiry_id)
+    if detail is None:  # pragma: no cover - changed a moment ago
+        raise ApiError(404, "not_found", "Enquiry not found")
+    return detail
+
+
+@router.get(
+    "/{enquiry_id}/draft",
+    response_model=DraftOut,
+    responses={
+        401: {"model": ErrorEnvelope},
+        404: {"model": ErrorEnvelope},
+    },
+)
+def get_draft_route(
+    enquiry_id: uuid.UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    require_authenticated(request, session)
+    try:
+        view = drafts.get_draft(session, enquiry_id)
+    except EnquiryNotFound as err:
+        raise ApiError(404, "not_found", "Enquiry not found") from err
+    return _draft_out_from_view(view)
+
+
+@router.put(
+    "/{enquiry_id}/draft",
+    response_model=DraftOut,
+    responses={
+        401: {"model": ErrorEnvelope},
+        403: {"model": ErrorEnvelope},
+        404: {"model": ErrorEnvelope},
+        409: {"model": ErrorEnvelope},
+        422: {"model": ErrorEnvelope},
+    },
+)
+@router.post(
+    "/{enquiry_id}/draft",
+    response_model=DraftOut,
+    responses={
+        401: {"model": ErrorEnvelope},
+        403: {"model": ErrorEnvelope},
+        404: {"model": ErrorEnvelope},
+        409: {"model": ErrorEnvelope},
+        422: {"model": ErrorEnvelope},
+    },
+)
+def save_draft_route(
+    enquiry_id: uuid.UUID,
+    payload: DraftSaveIn,
+    request: Request,
+    session: Session = Depends(get_session),
+    csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
+):
+    resolved = require_operator(request, session, csrf_token)
+    session.rollback()
+    try:
+        view = drafts.save_draft(
+            session,
+            enquiry_id,
+            subject=payload.subject,
+            body=payload.body,
+            expected_draft_version=payload.expected_draft_version,
+            operator_id=resolved.operator_id,
+            clock=request.app.state.clock,
+        )
+    except EnquiryNotFound as err:
+        raise ApiError(404, "not_found", "Enquiry not found") from err
+    except VersionConflict as err:
+        raise ApiError(
+            409, "version_conflict", "Draft version conflict"
+        ) from err
+    return _draft_out_from_view(view)

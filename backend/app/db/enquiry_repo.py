@@ -5,10 +5,10 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
-from app.db import tables
+from app.db import event_repo, tables
 
 
 def get_enquiry_detail(session: Session, enquiry_id: uuid.UUID) -> Any | None:
@@ -130,6 +130,94 @@ def get_follow_up_task(session: Session, enquiry_id: uuid.UUID) -> Any | None:
         .order_by(tables.follow_up_tasks.c.created_at)
         .limit(1)
     ).one_or_none()
+
+
+def get_enquiry_for_update(
+    session: Session, enquiry_id: uuid.UUID
+) -> Any | None:
+    """Lock one enquiry row (FOR UPDATE) and return owner facts.
+
+    Callers take this row lock first; the event advisory lock is
+    taken last, inside the event insert functions (see event_repo).
+    """
+    owner = tables.owners.alias("lock_owner")
+    return session.execute(
+        select(
+            tables.enquiries.c.id,
+            tables.enquiries.c.version,
+            tables.enquiries.c.owner_id,
+            owner.c.code.label("owner_code"),
+        )
+        .outerjoin(owner, owner.c.id == tables.enquiries.c.owner_id)
+        .where(tables.enquiries.c.id == enquiry_id)
+        .with_for_update(of=tables.enquiries)
+    ).one_or_none()
+
+
+def get_owner_by_code(session: Session, code: str) -> Any | None:
+    return session.execute(
+        select(
+            tables.owners.c.id,
+            tables.owners.c.code,
+            tables.owners.c.display_name,
+        ).where(tables.owners.c.code == code)
+    ).one_or_none()
+
+
+def update_enquiry_owner(
+    session: Session,
+    enquiry_id: uuid.UUID,
+    *,
+    expected_version: int,
+    new_owner_id: uuid.UUID,
+) -> int:
+    """Conditional owner update keyed on the expected version."""
+    result = session.execute(
+        update(tables.enquiries)
+        .where(
+            tables.enquiries.c.id == enquiry_id,
+            tables.enquiries.c.version == expected_version,
+        )
+        .values(
+            owner_id=new_owner_id,
+            version=tables.enquiries.c.version + 1,
+        )
+    )
+    return result.rowcount
+
+
+def insert_owner_changed_event(session, *args, **kwargs):
+    event_repo.take_enquiry_event_lock(session, kwargs["enquiry_id"])
+    return _insert_owner_changed_event_locked(session, *args, **kwargs)
+
+
+def _insert_owner_changed_event_locked(
+    session: Session,
+    *,
+    enquiry_id: uuid.UUID,
+    operator_id: uuid.UUID,
+    from_owner_code: str | None,
+    to_owner_code: str,
+    from_owner_id: uuid.UUID | None,
+    to_owner_id: uuid.UUID,
+) -> uuid.UUID:
+    return session.execute(
+        insert(tables.activity_events)
+        .values(
+            enquiry_id=enquiry_id,
+            event_type="owner.changed",
+            severity="info",
+            actor_type="operator",
+            actor_id=operator_id,
+            details_json={
+                "from_owner_code": from_owner_code,
+                "to_owner_code": to_owner_code,
+                "from_owner_id": str(from_owner_id) if from_owner_id else None,
+                "to_owner_id": str(to_owner_id),
+            },
+        )
+        .returning(tables.activity_events.c.id)
+    ).scalar_one()
 
 
 def get_related_jobs(session: Session, enquiry_id: uuid.UUID, contact_id: uuid.UUID) -> list:
