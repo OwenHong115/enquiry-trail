@@ -33,6 +33,7 @@ from app.settings import Settings
 from app.ports.extraction import ExtractorPort
 from app.services import extraction as extraction_service
 from app.worker.claiming import claim_next, handle_claim
+# Fault matching is wired by app.worker.claiming, not by this runner.
 
 _LEASE_SECONDS = 60
 

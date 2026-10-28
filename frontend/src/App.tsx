@@ -7,6 +7,7 @@ import EnquiriesPage from "./pages/EnquiriesPage";
 import EnquiryDetailPage from "./pages/EnquiryDetailPage";
 import TasksPage from "./pages/TasksPage";
 import IntegrationsPage from "./pages/IntegrationsPage";
+import DemoPage from "./pages/DemoPage";
 
 function useHashRoute(): string {
   const [hash, setHash] = useState(() => window.location.hash || "#/enquiries");
@@ -59,6 +60,7 @@ export default function App() {
           <a href="#/enquiries">Enquiries</a>
           <a href="#/tasks">Tasks</a>
           <a href="#/integrations">Integrations</a>
+          <a href="#/demo">Demo</a>
         </nav>
         <span>Signed in as {session.username}</span>
         <button type="button" onClick={() => void logout()}>Sign out</button>
@@ -66,6 +68,7 @@ export default function App() {
       {detailMatch ? <EnquiryDetailPage id={detailMatch[1]} />
         : route.startsWith("#/tasks") ? <TasksPage />
         : route.startsWith("#/integrations") ? <IntegrationsPage />
+        : route.startsWith("#/demo") ? <DemoPage />
         : route.startsWith("#/quote") ? <QuotePage />
         : <EnquiriesPage />}
     </div>

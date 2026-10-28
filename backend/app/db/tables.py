@@ -11,13 +11,17 @@ from __future__ import annotations
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     MetaData,
     String,
     Table,
     Text,
+    UniqueConstraint,
     Uuid,
     text,
 )
@@ -270,5 +274,50 @@ enrichments = Table(
     Column("result_json", JSONB),
     Column("usage_json", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     Column("last_error_code", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
+)
+scenario_runs = Table(
+    "scenario_runs",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("scenario_id", String(80), nullable=False),
+    CheckConstraint("status IN ('pending', 'running', 'passed', 'failed', 'inconclusive')", name="ck_scenario_runs_status"),
+    Column("status", Text, nullable=False, server_default=text("'pending'")),
+    Column("fault_triggered", Boolean, nullable=False, server_default=text("false")),
+    Column("assertion_results", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
+    Column("finished_at", DateTime(timezone=True)),
+)
+
+demo_faults = Table(
+    "demo_faults",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("scenario_run_id", Uuid, nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("mode", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default=text("'armed'")),
+    Column("remaining_uses", Integer, nullable=False),
+    CheckConstraint("provider IN ('hubspot', 'slack', 'ai')", name="ck_demo_faults_provider"),
+    CheckConstraint("mode IN ('http_503_before_write', 'http_401_before_write', 'http_429_before_write', 'drop_success_response', 'invalid_ai_response', 'crash_after_remote_write')", name="ck_demo_faults_mode"),
+    CheckConstraint("status IN ('armed', 'exhausted', 'expired', 'cancelled')", name="ck_demo_faults_status"),
+    CheckConstraint("remaining_uses BETWEEN 0 AND 3", name="ck_demo_faults_remaining_uses"),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("created_by", Uuid, ForeignKey("operators.id"), nullable=False),
+    ForeignKeyConstraint(["scenario_run_id"], ["scenario_runs.id"], name="fk_demo_faults_scenario_run_id"),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
+)
+
+fault_claims = Table(
+    "fault_claims",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("match_request_id", Uuid, nullable=False, unique=True),
+    Column("fault_id", Uuid, ForeignKey("demo_faults.id")),
+    Column("scenario_run_id", Uuid, nullable=False),
+    Column("claim_identity", String(500), nullable=False),
+    UniqueConstraint("scenario_run_id", "claim_identity", name="uq_fault_claims_scenario_claim"),
+    ForeignKeyConstraint(["scenario_run_id"], ["scenario_runs.id"], name="fk_fault_claims_scenario_run_id"),
+    Column("result_json", JSONB, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
 )

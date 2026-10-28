@@ -73,6 +73,20 @@ class Handler(BaseHTTPRequestHandler):
         """Apply a fault; returns True when a response was sent."""
         if mode == "none":
             return False
+        if mode in ("http_503_before_write",):
+            self._send(503, {"error": "unavailable"})
+            return True
+        if mode == "http_401_before_write":
+            self._send(401, {"error": "auth_failed"})
+            return True
+        if mode == "http_429_before_write":
+            self._send(429, {"error": "rate_limited"}, {"Retry-After": "7"})
+            return True
+        if mode == "drop_success_response":
+            if commit is not None:
+                commit()
+            self._send(500, {"error": "internal_after_commit"})
+            return True
         if mode == "malformed":
             self._send(200, b"{not-json", raw=True)
             return True
