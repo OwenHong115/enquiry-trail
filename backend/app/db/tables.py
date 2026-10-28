@@ -272,3 +272,40 @@ enrichments = Table(
     Column("last_error_code", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
 )
+scenario_runs = Table(
+    "scenario_runs",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("scenario_id", String(80), nullable=False),
+    Column("status", Text, nullable=False, server_default=text("'pending'")),
+    Column("fault_triggered", Boolean, nullable=False, server_default=text("false")),
+    Column("assertion_results", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
+    Column("finished_at", DateTime(timezone=True)),
+)
+
+demo_faults = Table(
+    "demo_faults",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("scenario_run_id", Uuid, nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("mode", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default=text("'armed'")),
+    Column("remaining_uses", Integer, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("created_by", Uuid, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
+)
+
+fault_claims = Table(
+    "fault_claims",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("match_request_id", Uuid, nullable=False),
+    Column("fault_id", Uuid),
+    Column("scenario_run_id", Uuid, nullable=False),
+    Column("claim_identity", String(500), nullable=False),
+    Column("result_json", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
+)

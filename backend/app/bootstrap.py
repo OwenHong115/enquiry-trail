@@ -10,7 +10,7 @@ from fastapi.openapi.utils import get_openapi
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
-    auth, enquiries, health, intake, integrations, jobs, reviews, tasks, webhook,
+    auth, enquiries, health, intake, integrations, jobs, reviews, scenarios, tasks, webhook,
 )
 from app.api.errors import ApiError, ErrorEnvelope, envelope_response, error_response
 from app.api.ingress import IngressMiddleware
@@ -151,6 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(integrations.router)
     app.include_router(integrations.workers_router)
     app.include_router(webhook.router)
+    app.include_router(scenarios.router)
 
     def build_openapi() -> dict:
         # Schema metadata only: declare the session-cookie scheme

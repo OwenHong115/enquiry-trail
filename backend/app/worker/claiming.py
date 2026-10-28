@@ -25,6 +25,7 @@ from app.ports.extraction import ExtractorPort
 from app.services import crm_sync, health
 from app.services import extraction as extraction_service
 from app.services.scheduler import BackoffScheduler
+from app.worker.faults import FaultMatcher, mode_to_provider_error
 
 # The retryable-before-write set for this slice, and the worker
 # contract's jitter maximum (behavior.yaml worker.jitter_max_seconds).
@@ -523,6 +524,26 @@ def _handle_readback(
         )
 
 
+def _scenario_run_id(session: Session, enquiry_id) -> object:
+    from sqlalchemy import select as _select
+    from app.db import tables as _tables
+    row = session.execute(_select(_tables.enquiries.c.scenario_run_id).where(_tables.enquiries.c.id == enquiry_id)).scalar_one_or_none()
+    session.rollback()
+    return row
+
+
+def _check_fault(session: Session, claim: ClaimedJob, provider: str, operation: str):
+    run_id = _scenario_run_id(session, claim.entity_id)
+    if run_id is None:
+        return None
+    mode = FaultMatcher().check(session, scenario_run_id=run_id, job_id=claim.job_id, provider=provider, operation=operation)
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+    return mode
+
+
 def _handle_sync_claim(
     session: Session,
     claim: ClaimedJob,
@@ -530,6 +551,14 @@ def _handle_sync_claim(
     crm: CrmPort,
     scheduler: Scheduler,
 ) -> None:
+    _mode = _check_fault(session, claim, "hubspot", "create_contact")
+    if _mode is not None:
+        _err = mode_to_provider_error(_mode)
+        if _err is not None:
+            if not _record_provider_failure(session, claim, clock, scheduler, _err, operation_id=None, mark_operation_failed=False):
+                raise _err
+            return
+    _fault_mode = _mode
     # Block 1 (commit): fence, blocked check, recovery decision and
     # provider lookup. On NotFound the intent is inserted here, so
     # this commit makes it durable before any create is dispatched.
@@ -665,6 +694,14 @@ def _handle_sync_claim(
         ):
             raise
         return
+    if _fault_mode == "crash_after_remote_write":
+        import os as _os
+        _os._exit(97)
+    if _fault_mode == "drop_success_response":
+        _err = ProviderError("result_unknown")
+        if not _record_provider_failure(session, claim, clock, scheduler, _err, operation_id=lookup.operation_id, mark_operation_failed=True):
+            raise _err
+        return
     # Block 3 (commit): create outcome, link and synced event.
     with session.begin():
         if not _lease_still_held(session, claim):
@@ -714,6 +751,9 @@ def handle_claim(
     so the operation intent survives a crash after the remote
     create; the prepare path keeps its single transaction.
     """
+    _ai_fault_mode = None
+    if claim.kind == "prepare_enquiry":
+        _ai_fault_mode = _check_fault(session, claim, "ai", "extract")
     if claim.kind == "sync_contact":
         if crm is None:
             raise ValueError("sync_contact requires a CRM port")
@@ -738,7 +778,7 @@ def handle_claim(
                 owner_id=prepared.owner_id,
                 routing_reason=prepared.routing_reason,
             )
-            if extractor is not None:
+            if extractor is not None and _ai_fault_mode != "invalid_ai_response":
                 profile = extraction_profile or extraction_service.ExtractionProfile()
                 with session.begin_nested():
                     extraction_service.extract_and_persist(
