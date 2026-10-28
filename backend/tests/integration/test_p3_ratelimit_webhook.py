@@ -96,7 +96,7 @@ def _webhook(client: TestClient, body: bytes, timestamp: int, signature: str, ke
     )
 
 
-def test_login_rate_limit_returns_429_envelope(postgres_db: str) -> None:
+def test_login_rate_limit_returns_429_envelope(postgres_db: str, api_operator) -> None:
     client = _client(postgres_db, rate_limit_login_max=2, rate_limit_window_seconds=60)
     assert _login(client).status_code == 200
     assert _login(client).status_code == 200
@@ -106,7 +106,7 @@ def test_login_rate_limit_returns_429_envelope(postgres_db: str) -> None:
     assert blocked.headers.get("x-request-id")
 
 
-def test_intake_rate_limit_returns_429_envelope(postgres_db: str) -> None:
+def test_intake_rate_limit_returns_429_envelope(postgres_db: str, api_operator) -> None:
     client = _client(postgres_db, rate_limit_intake_max=1, rate_limit_window_seconds=60)
     login = _login(client)
     assert login.status_code == 200, login.text
@@ -121,7 +121,7 @@ def test_intake_rate_limit_returns_429_envelope(postgres_db: str) -> None:
     assert blocked.json()["error"]["code"] == "rate_limited"
 
 
-def test_spoofed_xff_does_not_evade_limit(postgres_db: str) -> None:
+def test_spoofed_xff_does_not_evade_limit(postgres_db: str, api_operator) -> None:
     client = _client(postgres_db, rate_limit_login_max=1, rate_limit_window_seconds=60)
     assert _login(client).status_code == 200
     spoofed = client.post(
@@ -168,6 +168,31 @@ def test_webhook_replay_rejected_second_delivery_creates_nothing_new(postgres_db
     replay = _webhook(client, body, ts, signature, str(uuid.uuid4()))
     assert replay.status_code == 409, replay.text
     assert replay.json()["error"]["code"] == "webhook_replay"
+    assert _count_enquiries(postgres_db) == 1
+
+
+def test_webhook_invalid_payload_does_not_burn_signature(postgres_db: str) -> None:
+    client = _client(postgres_db)
+    invalid = {**INTAKE, "message": "short"}
+    body = json.dumps(invalid).encode()
+    ts = int(time.time())
+    signature = _sign(body, ts)
+    key = str(uuid.uuid4())
+    first = _webhook(client, body, ts, signature, key)
+    assert first.status_code == 422, first.text
+    assert _count_enquiries(postgres_db) == 0
+    # Exact redelivery must still be a validation failure, not a
+    # webhook replay: the failed attempt must not claim the signature.
+    again = _webhook(client, body, ts, signature, key)
+    assert again.status_code == 422, again.text
+    assert again.json()["error"]["code"] == "validation_failed"
+    # A corrected delivery succeeds afterwards. A signature covers
+    # its body, so the corrected body is re-signed; the original
+    # event key is reused and no enquiry was created before.
+    valid_body = json.dumps(INTAKE).encode()
+    corrected = _webhook(client, valid_body, ts, _sign(valid_body, ts), key)
+    assert corrected.status_code == 202, corrected.text
+    assert corrected.json()["accepted"] is True
     assert _count_enquiries(postgres_db) == 1
 
 
