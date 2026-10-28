@@ -9,6 +9,13 @@ interface ScenarioRun {
 
 const STANDARD = ["demo-happy", "demo-crash", "demo-provider-503", "demo-director-unavailable"];
 
+const FAULT_FOR_SCENARIO: Record<string, { provider: string; mode: string }> = {
+  "demo-happy": { provider: "ai", mode: "invalid_ai_response" },
+  "demo-crash": { provider: "hubspot", mode: "crash_after_remote_write" },
+  "demo-provider-503": { provider: "hubspot", mode: "http_503_before_write" },
+  "demo-director-unavailable": { provider: "hubspot", mode: "http_503_before_write" },
+};
+
 export default function DemoPage() {
   const [runs, setRuns] = useState<ScenarioRun[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +33,14 @@ export default function DemoPage() {
   async function arm(scenarioId: string) {
     setBusy(true);
     try {
-      await api("/api/v1/scenarios", { method: "POST", body: JSON.stringify({ scenario_id: scenarioId }) });
+      const run = await api<ScenarioRun>("/api/v1/scenarios", { method: "POST", body: JSON.stringify({ scenario_id: scenarioId }) });
+      const fault = FAULT_FOR_SCENARIO[scenarioId];
+      if (fault) {
+        await api(`/api/v1/scenarios/${run.id}/faults`, {
+          method: "POST",
+          body: JSON.stringify({ provider: fault.provider, mode: fault.mode, uses: 1, expires_in_seconds: 600 }),
+        });
+      }
       await load();
     } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
   }
