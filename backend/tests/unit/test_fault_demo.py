@@ -56,7 +56,8 @@ def test_replay_returns_cached_mode_without_consuming_again():
     matcher = FaultMatcher(reader=reader, claimer=claimer,
                            on_triggered=lambda *a, **k: None,
                            on_director_unavailable=lambda *a, **k: None)
-    session = object()
+    from types import SimpleNamespace
+    session = SimpleNamespace()
     run = uuid.uuid4()
     job = uuid.uuid4()
     first = matcher.check(session, scenario_run_id=run, job_id=job,
