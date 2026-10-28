@@ -149,11 +149,11 @@ def test_crash_after_remote_write_recovers_by_readback(api_client, postgres_db, 
     httpx.post(f"{sim}/__test__/reset")
     # Intake via public API, then link to a scenario run.
     payload = {"first_name": "Crash", "last_name": "Demo", "email": "crash.demo@example.com",
-               "phone": None, "postcode": "2000", "service_type": "kitchen",
-               "message": "Crash demo enquiry", "preferred_contact": "email", "acknowledge_demo": True}
-    r = api_client.post("/api/v1/intake", json=payload, headers={"X-CSRF-Token": api_client.csrf_token,
+               "phone": "+61412345678", "postcode": "2000", "service_type": "kitchen",
+               "message": "I need a kitchen renovation next month. My budget is around AUD 20,000.", "preferred_contact": "email", "acknowledge_demo": True}
+    r = api_client.post("/api/v1/intake/form", json=payload, headers={"X-CSRF-Token": api_client.csrf_token,
                         "Idempotency-Key": str(uuid.uuid4())})
-    assert r.status_code in (200, 201), r.text
+    assert r.status_code in (200, 201, 202), r.text
     enquiry_id = r.json()["enquiry_id"]
     run = _create_run(api_client, "demo-crash")
     engine = create_engine(postgres_db)
@@ -162,7 +162,7 @@ def test_crash_after_remote_write_recovers_by_readback(api_client, postgres_db, 
         conn.execute(text("UPDATE leadops.enquiries SET scenario_run_id=:r WHERE id=:e"),
                      {"r": run["id"], "e": enquiry_id})
     # Prepare in-process so the sync job exists.
-    clock = FakeClock(T0)
+    clock = FakeClock(datetime.now(timezone.utc))
     crm = HttpCrmAdapter(sim, TOKEN)
     s = factory()
     try:
@@ -182,21 +182,21 @@ def test_crash_after_remote_write_recovers_by_readback(api_client, postgres_db, 
         sess.close()
     script = (
         "import uuid,sys\n"
-        f"sys.path.insert(0, {str(ROOT / 'backend')!r})\n"
+        f"sys.path.insert(0, {str(ROOT / 'backend')!r}); sys.path.insert(0, {str(ROOT / 'backend' / 'tests')!r})\n"
         "from sqlalchemy import create_engine\nfrom sqlalchemy.orm import sessionmaker\n"
         "from app.adapters.crm_http import HttpCrmAdapter\n"
         "from app.worker.runner import run_once\nfrom support.fake_clock import FakeClock\n"
         "from datetime import datetime, timezone\n"
         f"e=create_engine({postgres_db!r}); f=sessionmaker(bind=e); s=f()\n"
-        f"run_once(s, uuid.uuid4(), FakeClock(datetime(2026,10,21,tzinfo=timezone.utc)), HttpCrmAdapter({sim!r}, {TOKEN!r}), heartbeat_interval_seconds=0)\n"
+        f"print('HANDLED', run_once(s, uuid.uuid4(), FakeClock(datetime.now(timezone.utc)), HttpCrmAdapter({sim!r}, {TOKEN!r}), heartbeat_interval_seconds=0))\n"
         "print('SURVIVED')\n"
     )
     env = dict(os.environ, PYTHONPATH=str(ROOT / "backend"))
     proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60, env=env)
     assert proc.returncode != 0, proc.stdout + proc.stderr
     assert "SURVIVED" not in proc.stdout
-    counts = httpx.get(f"{sim}/__test__/counts").json()
-    assert counts["create"] == 1
+    counts = httpx.get(f"{sim}/__test__/counts").json()["counts"]
+    assert counts["create"] == 1, proc.stdout + proc.stderr
     # Expire the lease the dead worker held, then a restarted worker reconciles.
     with engine.begin() as conn:
         conn.execute(text("UPDATE leadops.jobs SET lease_until = clock_timestamp() - interval '1 minute', next_attempt_at = clock_timestamp() - interval '1 minute' WHERE state='running'"))
