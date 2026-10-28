@@ -89,6 +89,18 @@ def get_scenario(run_id: uuid.UUID, request: Request,
     return run
 
 
+@router.post("/api/v1/scenarios/{run_id}/finish")
+def finish_scenario(run_id: uuid.UUID, request: Request,
+                    session: Session = Depends(get_session),
+                    x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token")):
+    require_operator(request, session, x_csrf_token)
+    session.rollback()
+    run = demo_service.finish_run(session, run_id)
+    if run is None:
+        raise ApiError(404, "not_found", "Scenario run not found")
+    return run
+
+
 @router.post("/api/v1/scenarios/{run_id}/faults", status_code=201)
 def arm_fault(run_id: uuid.UUID, body: FaultArmIn, request: Request,
               session: Session = Depends(get_session),

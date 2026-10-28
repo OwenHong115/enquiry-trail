@@ -49,6 +49,19 @@ def arm_fault(session: Session, *, run_id: uuid.UUID, provider: str, mode: str,
         return _fault_out(row)
 
 
+def finish_run(session: Session, run_id: uuid.UUID) -> dict | None:
+    """Finish a run through fault_repo and return its final shape."""
+    if fault_repo.get_run(session, run_id) is None:
+        session.rollback()
+        return None
+    session.rollback()
+    with session.begin():
+        fault_repo.finish_run(session, run_id)
+        row = fault_repo.get_run(session, run_id)
+        faults = fault_repo.list_faults(session, run_id)
+        return _run_out(row, faults=faults)
+
+
 def _run_out(row, *, faults) -> dict:
     out = {
         "id": row["id"], "scenario_id": row["scenario_id"], "status": row["status"],
