@@ -69,6 +69,38 @@ def test_replay_returns_cached_mode_without_consuming_again():
     assert calls["consume"] == 1
 
 
+def test_fault_tables_mirror_migration_constraints():
+    from sqlalchemy import UniqueConstraint
+
+    from app.db import tables
+
+    claim_uniques = {
+        tuple(sorted(c.name for c in constraint.columns))
+        for constraint in tables.fault_claims.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert ("claim_identity", "scenario_run_id") in claim_uniques
+    assert tables.fault_claims.c.match_request_id.unique is True
+    fault_fk_targets = {
+        fk.target_fullname for fk in tables.fault_claims.foreign_keys
+    }
+    assert "leadops.demo_faults.id" in fault_fk_targets
+    assert "leadops.scenario_runs.id" in fault_fk_targets
+    demo_fk_targets = {
+        fk.target_fullname for fk in tables.demo_faults.foreign_keys
+    }
+    assert "leadops.scenario_runs.id" in demo_fk_targets
+    assert "leadops.operators.id" in demo_fk_targets
+    check_sql = " ".join(
+        str(c.sqltext)
+        for t in (tables.scenario_runs, tables.demo_faults)
+        for c in t.constraints
+        if c.__class__.__name__ == "CheckConstraint"
+    )
+    assert "inconclusive" in check_sql
+    assert "crash_after_remote_write" in check_sql
+
+
 def test_director_unavailable_never_raises_and_reports_inconclusive():
     seen = {}
 

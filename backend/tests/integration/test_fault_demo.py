@@ -207,3 +207,260 @@ def test_crash_after_remote_write_recovers_by_readback(api_client, postgres_db, 
     assert links == 1
     assert tasks == 1
     engine.dispose()
+
+
+def _fault_setup(db_session, seeded_operator, *, uses=1, mode="http_503_before_write",
+                 expires_at=None):
+    from app.db import fault_repo
+    run = fault_repo.create_run(db_session, scenario_id="demo-regression")
+    db_session.commit()
+    fault = fault_repo.arm_fault(
+        db_session, run_id=run.id, provider="hubspot", mode=mode, uses=uses,
+        expires_at=expires_at or (datetime.now(timezone.utc) + timedelta(minutes=10)),
+        created_by=seeded_operator)
+    db_session.commit()
+    return run, fault
+
+
+def test_try_claim_competing_duplicate_consumes_once(postgres_db, db_session, seeded_operator):
+    import threading
+
+    from app.db import fault_repo
+    run, fault = _fault_setup(db_session, seeded_operator, uses=2)
+    fault_row = dict(fault_repo.get_fault(db_session, fault.id))
+    factory = sessionmaker(bind=create_engine(postgres_db))
+    barrier = threading.Barrier(2)
+    results: list = []
+    errors: list = []
+
+    def compete():
+        session = factory()
+        try:
+            barrier.wait(timeout=10)
+            outcome = fault_repo.try_claim(
+                session, run_id=run.id, fault=fault_row,
+                claim_identity="job-1:hubspot:create_contact")
+            session.commit()
+            results.append(outcome)
+        except Exception as err:  # noqa: BLE001 - collected and asserted below
+            errors.append(err)
+            session.rollback()
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=compete) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert errors == [], errors
+    assert sorted(consumed for _mode, consumed in results) == [False, True]
+    claims = fault_repo.list_claims(db_session, run.id)
+    assert len(claims) == 1
+    assert fault_repo.get_fault(db_session, fault.id).remaining_uses == 1
+    events = db_session.execute(text(
+        "SELECT count(*) FROM leadops.activity_events "
+        "WHERE scenario_run_id=:r AND event_type='fault.triggered'"),
+        {"r": str(run.id)}).scalar_one()
+    assert events == 1
+
+
+def test_expired_fault_transitions_to_expired(db_session, seeded_operator):
+    from app.db import fault_repo
+    run, fault = _fault_setup(
+        db_session, seeded_operator,
+        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    found = fault_repo.find_armed_fault(db_session, run.id, "hubspot")
+    db_session.commit()
+    assert found is None
+    assert fault_repo.get_fault(db_session, fault.id).status == "expired"
+
+
+def _arrange_linked_job(postgres_db, *, scenario_run_id, prepare_first=True):
+    from app.services.intake import submit_intake
+    from app.worker.claiming import claim_next, handle_claim
+    from support.fake_crm import FakeCrm  # noqa: F401 - re-exported for callers
+    from support.routing_config import ROUTING_CONFIG
+    factory = sessionmaker(bind=create_engine(postgres_db))
+    clock = FakeClock(T0)
+    worker = uuid.uuid4()
+    session = factory()
+    try:
+        result = submit_intake(
+            session,
+            {"first_name": "Alex", "last_name": "Morgan",
+             "email": f"fault-{uuid.uuid4().hex[:8]}@example.com",
+             "phone": "+61412345678", "postcode": "2150",
+             "service_type": "bathroom",
+             "message": "I need a bathroom renovation next month. "
+                        "My budget is around AUD 20,000.",
+             "preferred_contact": "email", "acknowledge_demo": True},
+            source="web", event_key=uuid.uuid4(), clock=clock,
+            routing_config=ROUTING_CONFIG)
+        enquiry_id = result.enquiry_id
+    finally:
+        session.close()
+    with create_engine(postgres_db).begin() as conn:
+        conn.execute(text(
+            "UPDATE leadops.enquiries SET scenario_run_id=:r WHERE id=:e"),
+            {"r": str(scenario_run_id), "e": str(enquiry_id)})
+    if prepare_first:
+        session = factory()
+        try:
+            prepare = claim_next(session, worker, clock)
+        finally:
+            session.close()
+        assert prepare is not None and prepare.kind == "prepare_enquiry"
+        session = factory()
+        try:
+            handle_claim(session, prepare, clock)
+        finally:
+            session.close()
+    session = factory()
+    try:
+        claim = claim_next(session, worker, clock)
+    finally:
+        session.close()
+    return clock, worker, claim, enquiry_id
+
+
+def _fault_counts(postgres_db, run_id, fault_id):
+    engine = create_engine(postgres_db)
+    try:
+        with engine.connect() as conn:
+            remaining = conn.execute(text(
+                "SELECT remaining_uses FROM leadops.demo_faults WHERE id=:f"),
+                {"f": str(fault_id)}).scalar_one()
+            triggered = conn.execute(text(
+                "SELECT count(*) FROM leadops.activity_events "
+                "WHERE scenario_run_id=:r AND event_type='fault.triggered'"),
+                {"r": str(run_id)}).scalar_one()
+        return remaining, triggered
+    finally:
+        engine.dispose()
+
+
+def test_stale_lease_consumes_no_fault(postgres_db, db_session, seeded_operator):
+    from app.db import fault_repo
+    from app.worker.claiming import ClaimedJob, handle_claim
+    from support.fake_crm import FakeCrm
+    from support.fake_scheduler import FakeScheduler
+    run, fault = _fault_setup(db_session, seeded_operator, uses=1)
+    db_session.close()
+    clock, _worker, claim, _enquiry_id = _arrange_linked_job(
+        postgres_db, scenario_run_id=run.id)
+    assert claim is not None and claim.kind == "sync_contact"
+    stale = ClaimedJob(job_id=claim.job_id, kind=claim.kind,
+                       entity_id=claim.entity_id, lease_token=uuid.uuid4(),
+                       attempt_no=claim.attempt_no, cycle_no=claim.cycle_no,
+                       cycle_attempt_count=claim.cycle_attempt_count)
+    factory = sessionmaker(bind=create_engine(postgres_db))
+    session = factory()
+    try:
+        handle_claim(session, stale, clock, crm=FakeCrm(), scheduler=FakeScheduler())
+    finally:
+        session.close()
+    remaining, triggered = _fault_counts(postgres_db, run.id, fault.id)
+    assert remaining == 1
+    assert triggered == 0
+
+
+def test_provider_blocked_consumes_no_fault(postgres_db, db_session, seeded_operator):
+    from app.worker.claiming import handle_claim
+    from support.fake_crm import FakeCrm
+    from support.fake_scheduler import FakeScheduler
+    run, fault = _fault_setup(db_session, seeded_operator, uses=1)
+    db_session.close()
+    with create_engine(postgres_db).begin() as conn:
+        conn.execute(text(
+            "INSERT INTO leadops.integration_health "
+            "(provider, status, updated_at) VALUES ('hubspot', 'blocked', clock_timestamp()) "
+            "ON CONFLICT (provider) DO UPDATE SET status='blocked'"))
+    clock, _worker, claim, _enquiry_id = _arrange_linked_job(
+        postgres_db, scenario_run_id=run.id)
+    assert claim is not None and claim.kind == "sync_contact"
+    factory = sessionmaker(bind=create_engine(postgres_db))
+    session = factory()
+    try:
+        handle_claim(session, claim, clock, crm=FakeCrm(), scheduler=FakeScheduler())
+    finally:
+        session.close()
+    remaining, triggered = _fault_counts(postgres_db, run.id, fault.id)
+    assert remaining == 1
+    assert triggered == 0
+
+
+def test_scenario_lookup_failure_leaves_job_handled(postgres_db, db_session,
+                                                    seeded_operator, monkeypatch):
+    from app.db import fault_repo
+    from app.worker import claiming
+    run, _fault = _fault_setup(db_session, seeded_operator, uses=1,
+                               mode="invalid_ai_response")
+    # Arm for the ai provider used by the prepare path.
+    fault_repo.arm_fault(
+        db_session, run_id=run.id, provider="ai", mode="invalid_ai_response",
+        uses=1, expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        created_by=seeded_operator)
+    db_session.commit()
+    db_session.close()
+
+    def broken_lookup(session, enquiry_id):
+        raise RuntimeError("scenario lookup down")
+
+    monkeypatch.setattr(claiming, "_scenario_run_id", broken_lookup)
+    clock, _worker, claim, enquiry_id = _arrange_linked_job(
+        postgres_db, scenario_run_id=run.id, prepare_first=False)
+    assert claim is not None and claim.kind == "prepare_enquiry"
+    factory = sessionmaker(bind=create_engine(postgres_db))
+    session = factory()
+    try:
+        claiming.handle_claim(session, claim, clock)  # must not raise
+    finally:
+        session.close()
+    engine = create_engine(postgres_db)
+    try:
+        with engine.connect() as conn:
+            prepared = conn.execute(text(
+                "SELECT local_prepared_at FROM leadops.enquiries WHERE id=:e"),
+                {"e": str(enquiry_id)}).scalar_one()
+            status = conn.execute(text(
+                "SELECT status FROM leadops.scenario_runs WHERE id=:r"),
+                {"r": str(run.id)}).scalar_one()
+            unavailable = conn.execute(text(
+                "SELECT count(*) FROM leadops.activity_events "
+                "WHERE scenario_run_id=:r AND event_type='fault.director_unavailable'"),
+                {"r": str(run.id)}).scalar_one()
+    finally:
+        engine.dispose()
+    assert prepared is not None
+    assert status == "inconclusive"
+    assert unavailable == 1
+
+
+def test_finished_run_carries_assertion_results(api_client, db_session, seeded_operator):
+    from app.db import fault_repo
+    run = _create_run(api_client, "demo-finish")
+    run_id = uuid.UUID(run["id"])
+    fault = fault_repo.arm_fault(
+        db_session, run_id=run_id, provider="hubspot",
+        mode="http_503_before_write", uses=1,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        created_by=seeded_operator)
+    db_session.commit()
+    matcher = FaultMatcher()
+    mode = matcher.check(db_session, scenario_run_id=run_id, job_id=uuid.uuid4(),
+                         provider="hubspot", operation="create_contact")
+    db_session.commit()
+    assert mode == "http_503_before_write"
+    r = api_client.post(f"/api/v1/scenarios/{run['id']}/finish",
+                        headers={"X-CSRF-Token": api_client.csrf_token})
+    assert r.status_code in (200, 201), r.text
+    body = r.json()
+    assert body["assertion_results"], body
+    assert body["status"] == "passed", body
+    assert body["finished_at"] is not None
+
+
+def test_scenario_write_without_csrf_is_forbidden(api_client):
+    r = api_client.post("/api/v1/scenarios", json={"scenario_id": "demo-csrf"})
+    assert r.status_code == 403, r.text
