@@ -1,0 +1,19 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #f6f7f9; color: #1a1a1a; }
+.topbar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; padding: 0.75rem 1rem; background: #fff; border-bottom: 1px solid #ddd; }
+.topbar nav { display: flex; gap: 0.75rem; }
+.card { max-width: 900px; margin: 1.5rem auto; background: #fff; padding: 1.5rem; border-radius: 8px; }
+.card.narrow { max-width: 420px; }
+.badge { display: inline-block; background: #fff3cd; border: 1px solid #e6c200; border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.85rem; }
+label { display: block; margin-top: 0.9rem; font-weight: 600; }
+label.check { font-weight: 400; }
+input, select, textarea { width: 100%; padding: 0.5rem; margin-top: 0.25rem; box-sizing: border-box; }
+input[type="checkbox"] { width: auto; }
+button { margin-top: 1rem; padding: 0.55rem 1rem; cursor: pointer; }
+.error { background: #fdecea; border: 1px solid #c0392b; padding: 0.75rem; margin: 1rem 0; }
+.field-error { color: #c0392b; margin: 0.25rem 0 0; }
+.success { background: #eafaf1; border: 1px solid #1e8449; padding: 0.75rem; margin: 1rem 0; }
+table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+th, td { border: 1px solid #ddd; padding: 0.4rem; text-align: left; }
+.grid { display: grid; grid-template-columns: 160px 1fr; gap: 0.3rem 1rem; }
+.task { border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin-top: 1rem; }
+pre { white-space: pre-wrap; word-break: break-word; }
