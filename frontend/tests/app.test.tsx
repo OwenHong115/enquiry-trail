@@ -39,9 +39,9 @@ describe("polling visibility (A28)", () => {
 });
 
 describe("login page", () => {
-  it("renders labelled fields and a synthetic-data badge", () => {
+  it("renders labelled fields and a synthetic-data badge", async () => {
     render(<App />);
-    expect(screen.getByLabelText(/username/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/username/i)).toBeInTheDocument());
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
     expect(screen.getByText(/synthetic demo data/i)).toBeInTheDocument();
   });
@@ -65,6 +65,7 @@ describe("login page", () => {
       ),
     );
     render(<App />);
+    await waitFor(() => expect(screen.getByLabelText(/username/i)).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText(/username/i), { target: { value: "demo-operator" } });
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "wrong-password-1" } });
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
@@ -103,6 +104,7 @@ describe("quote form input retention (A28)", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole("link", { name: /new quote/i })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("link", { name: /new quote/i }));
+    await waitFor(() => expect(screen.getByLabelText(/project details/i)).toBeInTheDocument());
     const message = screen.getByLabelText(/project details/i) as HTMLTextAreaElement;
     fireEvent.change(message, { target: { value: "Please renovate our small bathroom fully." } });
     fireEvent.change(screen.getByLabelText(/first name/i), { target: { value: "Ada" } });
