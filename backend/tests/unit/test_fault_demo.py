@@ -84,13 +84,13 @@ def test_fault_tables_mirror_migration_constraints():
     fault_fk_targets = {
         fk.target_fullname for fk in tables.fault_claims.foreign_keys
     }
-    assert "leadops.demo_faults.id" in fault_fk_targets
-    assert "leadops.scenario_runs.id" in fault_fk_targets
+    assert "demo_faults.id" in fault_fk_targets
+    assert "scenario_runs.id" in fault_fk_targets
     demo_fk_targets = {
         fk.target_fullname for fk in tables.demo_faults.foreign_keys
     }
-    assert "leadops.scenario_runs.id" in demo_fk_targets
-    assert "leadops.operators.id" in demo_fk_targets
+    assert "scenario_runs.id" in demo_fk_targets
+    assert "operators.id" in demo_fk_targets
     check_sql = " ".join(
         str(c.sqltext)
         for t in (tables.scenario_runs, tables.demo_faults)
