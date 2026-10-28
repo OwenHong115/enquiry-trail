@@ -20,7 +20,7 @@ from app.domain.routing import routing_config_hash
 from app.logging import configure_logging, log_event
 from app.services.clock import SystemBusinessClock
 from app.settings import Settings
-from app.worker.runner import _resolve_crm
+from app.worker.runner import _extraction_profile, _resolve_crm, _resolve_extractor
 
 _HTTP_CODE_MAP = {
     400: "validation_failed",
@@ -51,6 +51,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # CRM port resolved once, with the worker's resolver; tests
     # may replace app.state.crm with a fake.
     app.state.crm = _resolve_crm(settings)
+    app.state.extractor = _resolve_extractor(settings)
+    app.state.extraction_profile = _extraction_profile(settings)
     engine = make_engine(settings.database_url)
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)

@@ -255,3 +255,20 @@ draft_edits = Table(
     Column("operator_id", Uuid),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
+
+enrichments = Table(
+    "enrichments",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("enquiry_id", Uuid, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("input_hash", String(64), nullable=False),
+    Column("provider", String(80)),
+    Column("model", String(120)),
+    Column("prompt_version", String(80), nullable=False),
+    Column("parameters_snapshot", JSONB, nullable=False),
+    Column("result_json", JSONB),
+    Column("usage_json", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column("last_error_code", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
+)
