@@ -94,5 +94,15 @@ services:
     # The worker has no HTTP surface; its health is its heartbeat row,
     # so no compose healthcheck is faked here.
 
+  web:
+    restart: unless-stopped
+    build: ./frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      # Loopback only; nginx proxies /api to the api service.
+      - "127.0.0.1:5173:80"
+
 volumes:
   leadops_db_data:
