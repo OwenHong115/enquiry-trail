@@ -179,6 +179,13 @@ class Settings:
             webhook_secret=os.environ.get("WEBHOOK_SECRET", ""),
             webhook_replay_window_seconds=int(os.environ.get("WEBHOOK_REPLAY_WINDOW_SECONDS", "300")),
             extractor_mode=os.environ.get("EXTRACTOR_MODE", "fixture"),
-            extractor_model=os.environ.get("EXTRACTOR_MODEL", "fixture-model"),
+            # Connected mode must not inherit the fixture default
+            # model: an unset EXTRACTOR_MODEL is a startup failure
+            # there (see __post_init__), never fixture data in disguise.
+            extractor_model=(
+                os.environ.get("EXTRACTOR_MODEL", "")
+                if os.environ.get("EXTRACTOR_MODE", "fixture") == "connected"
+                else os.environ.get("EXTRACTOR_MODEL", "fixture-model")
+            ),
             extractor_prompt_version=os.environ.get("EXTRACTOR_PROMPT_VERSION", "v1"),
         )
