@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, errorMessage } from "../lib/api";
+import { api, errorMessage, fieldError } from "../lib/api";
 import { usePolling } from "../lib/polling";
 import type { TaskList } from "../lib/types";
 
@@ -8,6 +8,8 @@ export default function TasksPage() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("open");
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [actionError, setActionError] = useState<unknown>(null);
+  const [failedTaskId, setFailedTaskId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({ limit: "25" });
@@ -23,13 +25,19 @@ export default function TasksPage() {
 
   async function act(taskId: string, version: number, action: "complete" | "cancel") {
     const reason = reasons[taskId] ?? "";
+    setActionError(null);
+    setFailedTaskId(null);
     try {
       await api(`/api/v1/tasks/${taskId}/${action}`, {
         method: "POST",
         body: JSON.stringify({ expected_version: version, reason }),
       });
       await load();
-    } catch (err) { setError(errorMessage(err)); }
+    } catch (err) {
+      setError(errorMessage(err));
+      setActionError(err);
+      setFailedTaskId(taskId);
+    }
   }
 
   return (
@@ -45,22 +53,32 @@ export default function TasksPage() {
       </select>
       {!data && !error && <p>Loading tasks...</p>}
       {data && data.items.length === 0 && <p>No tasks found.</p>}
-      {data && data.items.map((t) => (
-        <article key={t.id} className="task">
-          <h2>{t.title}</h2>
-          <p>{t.status} - due {new Date(t.due_at).toLocaleString()} - owner {t.owner.display_name}</p>
-          <p>Enquiry <a href={`#/enquiries/${t.enquiry.id}`}>{t.enquiry.display_no}</a> ({t.enquiry.service_type})</p>
-          {t.status === "open" && (
-            <div>
-              <label htmlFor={`reason-${t.id}`}>Reason (10-500 characters)</label>
-              <input id={`reason-${t.id}`} value={reasons[t.id] ?? ""}
-                onChange={(e) => setReasons((r) => ({ ...r, [t.id]: e.target.value }))} />
-              <button type="button" onClick={() => void act(t.id, t.version, "complete")}>Complete task</button>
-              <button type="button" onClick={() => void act(t.id, t.version, "cancel")}>Cancel task</button>
-            </div>
-          )}
-        </article>
-      ))}
+      {data && data.items.map((t) => {
+        const reason = reasons[t.id] ?? "";
+        const tooShort = reason.length < 10;
+        const fe = failedTaskId === t.id ? fieldError(actionError, "reason") : undefined;
+        return (
+          <article key={t.id} className="task">
+            <h2>{t.title}</h2>
+            <p>{t.status} - due {new Date(t.due_at).toLocaleString()} - owner {t.owner.display_name}</p>
+            <p>Enquiry <a href={`#/enquiries/${t.enquiry.id}`}>{t.enquiry.display_no}</a> ({t.enquiry.service_type})</p>
+            {t.status === "open" && (
+              <div>
+                <label htmlFor={`reason-${t.id}`}>Reason (10-500 characters)</label>
+                <input id={`reason-${t.id}`} value={reason} required minLength={10} maxLength={500}
+                  aria-describedby={fe ? `reason-${t.id}-err` : undefined}
+                  onChange={(e) => {
+                    setReasons((r) => ({ ...r, [t.id]: e.target.value }));
+                    if (failedTaskId === t.id) { setActionError(null); setFailedTaskId(null); }
+                  }} />
+                {fe && <p id={`reason-${t.id}-err`} className="field-error">{fe}</p>}
+                <button type="button" disabled={tooShort} onClick={() => void act(t.id, t.version, "complete")}>Complete task</button>
+                <button type="button" disabled={tooShort} onClick={() => void act(t.id, t.version, "cancel")}>Cancel task</button>
+              </div>
+            )}
+          </article>
+        );
+      })}
     </main>
   );
 }

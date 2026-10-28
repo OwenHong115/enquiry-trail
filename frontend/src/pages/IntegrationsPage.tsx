@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, errorMessage } from "../lib/api";
+import { api, errorMessage, fieldError } from "../lib/api";
 import { usePolling } from "../lib/polling";
 import type { IntegrationItem, WorkerHealth } from "../lib/types";
 
@@ -8,6 +8,8 @@ export default function IntegrationsPage() {
   const [workers, setWorkers] = useState<WorkerHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [actionError, setActionError] = useState<unknown>(null);
+  const [failedProvider, setFailedProvider] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -23,6 +25,8 @@ export default function IntegrationsPage() {
   usePolling(load, 15000);
 
   async function resume(item: IntegrationItem) {
+    setActionError(null);
+    setFailedProvider(null);
     try {
       await api(`/api/v1/integrations/${encodeURIComponent(item.provider)}/resume`, {
         method: "POST",
@@ -33,7 +37,11 @@ export default function IntegrationsPage() {
         }),
       });
       await load();
-    } catch (err) { setError(errorMessage(err)); }
+    } catch (err) {
+      setError(errorMessage(err));
+      setActionError(err);
+      setFailedProvider(item.provider);
+    }
   }
 
   return (
@@ -43,21 +51,30 @@ export default function IntegrationsPage() {
       {error && <div role="alert" className="error">{error}</div>}
       {!items && !error && <p>Loading integrations...</p>}
       {items && items.length === 0 && <p>No integrations reported.</p>}
-      {items && items.map((it) => (
-        <article key={it.provider} className="task">
-          <h2>{it.provider}</h2>
-          <p>Status: {it.status}{it.last_error_code ? ` - last error: ${it.last_error_code}` : ""}</p>
-          <p>Updated: {new Date(it.updated_at).toLocaleString()}</p>
-          {it.status === "blocked" && (
-            <div>
-              <label htmlFor={`resume-${it.provider}`}>Resume reason (10-500 characters)</label>
-              <input id={`resume-${it.provider}`} value={reasons[it.provider] ?? ""}
-                onChange={(e) => setReasons((r) => ({ ...r, [it.provider]: e.target.value }))} />
-              <button type="button" onClick={() => void resume(it)}>Resume integration</button>
-            </div>
-          )}
-        </article>
-      ))}
+      {items && items.map((it) => {
+        const reason = reasons[it.provider] ?? "";
+        const fe = failedProvider === it.provider ? fieldError(actionError, "reason") : undefined;
+        return (
+          <article key={it.provider} className="task">
+            <h2>{it.provider}</h2>
+            <p>Status: {it.status}{it.last_error_code ? ` - last error: ${it.last_error_code}` : ""}</p>
+            <p>Updated: {new Date(it.updated_at).toLocaleString()}</p>
+            {it.status === "blocked" && (
+              <div>
+                <label htmlFor={`resume-${it.provider}`}>Resume reason (10-500 characters)</label>
+                <input id={`resume-${it.provider}`} value={reason} required minLength={10} maxLength={500}
+                  aria-describedby={fe ? `resume-${it.provider}-err` : undefined}
+                  onChange={(e) => {
+                    setReasons((r) => ({ ...r, [it.provider]: e.target.value }));
+                    if (failedProvider === it.provider) { setActionError(null); setFailedProvider(null); }
+                  }} />
+                {fe && <p id={`resume-${it.provider}-err`} className="field-error">{fe}</p>}
+                <button type="button" disabled={reason.length < 10} onClick={() => void resume(it)}>Resume integration</button>
+              </div>
+            )}
+          </article>
+        );
+      })}
       <h2>Workers</h2>
       {!workers && <p>Loading worker health...</p>}
       {workers && workers.workers.length === 0 && <p>No workers reported.</p>}

@@ -49,7 +49,7 @@ export interface EnquiryDetail {
   scenario_run_id: string | null; routing_reason: string | null; rules_hash: string;
   review_reason_codes: string[]; review_resolution_note: string | null;
   task: TaskRef | null; enrichment: Record<string, unknown> | null;
-  draft: Record<string, unknown> | null;
+  draft: Draft | null;
   notification: { status: string; notification_id: string | null; last_error_code: string | null };
   local_prepared_at: string | null; required_contact_version: number;
   related_jobs: RelatedJob[];
@@ -81,6 +81,10 @@ export interface IntegrationItem {
 export interface WorkerHealth {
   workers: { worker_id: string; started_at: string; last_seen_at: string; active_job_count: number; status: "alive" | "stale" }[];
   stale_after_seconds: number;
+}
+export interface Draft {
+  enquiry_id: string; subject: string; body: string;
+  draft_version: number; updated_by: string | null; updated_at: string | null;
 }
 export interface JobOut {
   id: string; kind: string; state: string; cycle_no: number; attempt_count: number;
