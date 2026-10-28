@@ -55,6 +55,11 @@ class Settings:
     allowed_origins: tuple[str, ...] = ()
     max_request_bytes: int = 65536
     trusted_proxies: tuple[str, ...] = ()
+    rate_limit_intake_max: int = 600
+    rate_limit_login_max: int = 300
+    rate_limit_window_seconds: int = 60
+    webhook_secret: str = ""
+    webhook_replay_window_seconds: int = 300
 
     def __post_init__(self) -> None:
         # Fail fast: an empty secret makes CSRF tokens computable
@@ -83,6 +88,9 @@ class Settings:
             self.max_request_bytes, int
         ) or self.max_request_bytes <= 0:
             raise ValueError("MAX_REQUEST_BYTES must be a positive integer")
+        for _rl_name, _rl_value in (("RATE_LIMIT_INTAKE_MAX", self.rate_limit_intake_max), ("RATE_LIMIT_LOGIN_MAX", self.rate_limit_login_max), ("RATE_LIMIT_WINDOW_SECONDS", self.rate_limit_window_seconds), ("WEBHOOK_REPLAY_WINDOW_SECONDS", self.webhook_replay_window_seconds)):
+            if isinstance(_rl_value, bool) or not isinstance(_rl_value, int) or _rl_value <= 0:
+                raise ValueError(f"{_rl_name} must be a positive integer")
         for proxy in self.trusted_proxies:
             self._parse_proxy(proxy)
         if not (1 <= self.worker_concurrency <= 16):
@@ -156,4 +164,9 @@ class Settings:
             allowed_origins=_split_csv(allowed_raw) if allowed_raw else (),
             max_request_bytes=max_bytes,
             trusted_proxies=_split_csv(os.environ.get("TRUSTED_PROXIES", "")),
+            rate_limit_intake_max=int(os.environ.get("RATE_LIMIT_INTAKE_MAX", "600")),
+            rate_limit_login_max=int(os.environ.get("RATE_LIMIT_LOGIN_MAX", "300")),
+            rate_limit_window_seconds=int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60")),
+            webhook_secret=os.environ.get("WEBHOOK_SECRET", ""),
+            webhook_replay_window_seconds=int(os.environ.get("WEBHOOK_REPLAY_WINDOW_SECONDS", "300")),
         )

@@ -25,10 +25,14 @@ from starlette.responses import JSONResponse
 
 from app.api.errors import error_body
 from app.logging import log_event
+from app.db.session import make_engine, make_session_factory
+from app.security.proxy import effective_client_ip
+from app.security.ratelimit import check_rate_limit
 from app.settings import Settings
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _PUBLIC_PREFIX = "/api/v1/health/"
+_RATE_LIMITED_PATHS = {"/api/v1/intake/form": "intake", "/api/v1/auth/login": "login"}
 
 
 # Oversized bodies are rejected by IngressMiddleware itself,
@@ -49,6 +53,29 @@ class IngressMiddleware:
         self.app = app
         self.allowed_origins = set(settings.resolved_allowed_origins())
         self.max_bytes = settings.max_request_bytes
+        self.settings = settings
+        self._session_factory = None
+
+    def _rate_limited(self, scope, headers) -> bool:
+        scope_name = _RATE_LIMITED_PATHS.get(scope.get("path", ""))
+        if scope_name is None or scope.get("method") != "POST":
+            return False
+        try:
+            if self._session_factory is None:
+                self._session_factory = make_session_factory(make_engine(self.settings.database_url))
+            from types import SimpleNamespace
+            client = scope.get("client")
+            stub = SimpleNamespace(client=SimpleNamespace(host=client[0]) if client else None, headers=headers)
+            client_ip = effective_client_ip(stub, self.settings.trusted_proxy_networks())
+            limit = self.settings.rate_limit_intake_max if scope_name == "intake" else self.settings.rate_limit_login_max
+            session = self._session_factory()
+            try:
+                allowed, _retry = check_rate_limit(session, scope=scope_name, client_ip=client_ip, limit=limit, window_seconds=self.settings.rate_limit_window_seconds)
+            finally:
+                session.close()
+            return not allowed
+        except Exception:
+            return False
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -72,6 +99,12 @@ class IngressMiddleware:
                 )
                 await response(scope, receive, send)
                 return
+
+        if self._rate_limited(scope, headers):
+            response = _envelope(scope, 429, "rate_limited", "Rate limit exceeded")
+            log_event("http.request", request_id=scope["state"]["request_id"], method=method, path=path, status=429)
+            await response(scope, receive, send)
+            return
 
         content_length = headers.get("content-length")
         if content_length is not None:

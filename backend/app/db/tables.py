@@ -214,6 +214,16 @@ activity_events = Table(
     Column("scenario_run_id", Uuid),
 )
 
+rate_limit_counters = Table(
+    "rate_limit_counters",
+    metadata,
+    Column("scope", String(40), primary_key=True),
+    Column("subject_hash", String(64), primary_key=True),
+    Column("window_start", DateTime(timezone=True), primary_key=True),
+    Column("count", Integer, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+)
+
 worker_heartbeats = Table(
     "worker_heartbeats",
     metadata,
