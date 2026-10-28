@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from datetime import timedelta
 
-from app.db import crm_repo, intake_repo, job_repo
+from app.db import crm_repo, fault_repo, intake_repo, job_repo
 from app.logging import log_event
 from app.ports.clock import BusinessClock
 from app.ports.crm import (
@@ -527,21 +527,46 @@ def _handle_readback(
 def _scenario_run_id(session: Session, enquiry_id) -> object:
     from sqlalchemy import select as _select
     from app.db import tables as _tables
-    row = session.execute(_select(_tables.enquiries.c.scenario_run_id).where(_tables.enquiries.c.id == enquiry_id)).scalar_one_or_none()
-    session.rollback()
-    return row
+    return session.execute(_select(_tables.enquiries.c.scenario_run_id).where(_tables.enquiries.c.id == enquiry_id)).scalar_one_or_none()
+
+
+def _resolve_scenario_run_id(session: Session, enquiry_id) -> object:
+    from sqlalchemy import select as _select
+    from app.db import tables as _tables
+    return session.execute(_select(_tables.enquiries.c.scenario_run_id).where(_tables.enquiries.c.id == enquiry_id)).scalar_one_or_none()
 
 
 def _check_fault(session: Session, claim: ClaimedJob, provider: str, operation: str):
-    run_id = _scenario_run_id(session, claim.entity_id)
+    """Consume a fault for this claim, or return None.
+
+    Must be called inside the fenced transaction, after the claim
+    fence succeeds and after the provider-blocked check, in the same
+    flow as the provider call it modifies. A scenario lookup failure
+    is handled exactly like a matcher failure: the run (re-resolved
+    directly when the lookup raised) is marked inconclusive with
+    fault.director_unavailable, business work continues, and no
+    exception escapes. Fault work runs under a savepoint, so no
+    unrelated work is rolled back.
+    """
+    run_id = None
+    try:
+        with session.begin_nested():
+            run_id = _scenario_run_id(session, claim.entity_id)
+    except Exception:
+        try:
+            run_id = _resolve_scenario_run_id(session, claim.entity_id)
+        except Exception:
+            run_id = None
+        if run_id is not None:
+            try:
+                with session.begin_nested():
+                    fault_repo.mark_inconclusive(session, run_id)
+            except Exception:
+                pass
+        return None
     if run_id is None:
         return None
-    mode = FaultMatcher().check(session, scenario_run_id=run_id, job_id=claim.job_id, provider=provider, operation=operation)
-    try:
-        session.commit()
-    except Exception:
-        session.rollback()
-    return mode
+    return FaultMatcher().check(session, scenario_run_id=run_id, job_id=claim.job_id, provider=provider, operation=operation)
 
 
 def _handle_sync_claim(
@@ -551,14 +576,8 @@ def _handle_sync_claim(
     crm: CrmPort,
     scheduler: Scheduler,
 ) -> None:
-    _mode = _check_fault(session, claim, "hubspot", "create_contact")
-    if _mode is not None:
-        _err = mode_to_provider_error(_mode)
-        if _err is not None:
-            if not _record_provider_failure(session, claim, clock, scheduler, _err, operation_id=None, mark_operation_failed=False):
-                raise _err
-            return
-    _fault_mode = _mode
+    _fault_mode = None
+    _fault_error = None
     # Block 1 (commit): fence, blocked check, recovery decision and
     # provider lookup. On NotFound the intent is inserted here, so
     # this commit makes it durable before any create is dispatched.
@@ -591,14 +610,18 @@ def _handle_sync_claim(
                 )
                 blocked = True
             else:
-                unresolved = crm_repo.get_unresolved_operation_by_job(
-                    session, claim.job_id
-                )
-                if unresolved is not None:
-                    unresolved_id = unresolved.id
-                    contact = crm_sync.load_contact(session, claim)
-                else:
-                    lookup = crm_sync.begin_sync(session, claim, crm)
+                _fault_mode = _check_fault(session, claim, "hubspot", "create_contact")
+                if _fault_mode is not None:
+                    _fault_error = mode_to_provider_error(_fault_mode)
+                if _fault_error is None:
+                    unresolved = crm_repo.get_unresolved_operation_by_job(
+                        session, claim.job_id
+                    )
+                    if unresolved is not None:
+                        unresolved_id = unresolved.id
+                        contact = crm_sync.load_contact(session, claim)
+                    else:
+                        lookup = crm_sync.begin_sync(session, claim, crm)
     except ProviderError as err:
         # The lookup itself failed: block 1 rolled back, no intent
         # was written, and the failure is recorded in a fresh block.
@@ -614,6 +637,10 @@ def _handle_sync_claim(
             raise
         return
     if blocked:
+        return
+    if _fault_error is not None:
+        if not _record_provider_failure(session, claim, clock, scheduler, _fault_error, operation_id=None, mark_operation_failed=False):
+            raise _fault_error
         return
     if unresolved_id is not None:
         # Recovery is decided by the unresolved operation itself,
@@ -752,8 +779,6 @@ def handle_claim(
     create; the prepare path keeps its single transaction.
     """
     _ai_fault_mode = None
-    if claim.kind == "prepare_enquiry":
-        _ai_fault_mode = _check_fault(session, claim, "ai", "extract")
     if claim.kind == "sync_contact":
         if crm is None:
             raise ValueError("sync_contact requires a CRM port")
@@ -766,6 +791,7 @@ def handle_claim(
         if fenced == 0:
             return
         if claim.kind == "prepare_enquiry":
+            _ai_fault_mode = _check_fault(session, claim, "ai", "extract")
             prepared_at = clock.now_utc()
             prepared = job_repo.stamp_local_prepared(
                 session, claim.entity_id, prepared_at
