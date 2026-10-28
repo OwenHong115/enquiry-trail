@@ -1,4 +1,4 @@
-﻿"""Live CRM smoke tests (opt-in only; see conftest.py for the gate).
+"""Live CRM smoke tests (opt-in only; see conftest.py for the gate).
 
 These tests use the real HttpCrmAdapter against the configured real
 endpoint. They are never mocked and never run against the simulator as
