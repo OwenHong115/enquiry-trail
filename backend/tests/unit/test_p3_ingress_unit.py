@@ -158,6 +158,79 @@ def test_proxy_malformed_xff_fails_safe_to_peer() -> None:
     assert effective_client_ip(request, settings.trusted_proxy_networks()) == "10.0.0.2"
 
 
+def test_ingress_rate_limit_uses_injected_session_factory(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from starlette.datastructures import Headers
+
+    from app.api import ingress as ingress_module
+
+    seen: dict = {}
+    sentinel_session = SimpleNamespace(
+        close=lambda: seen.__setitem__("closed", True)
+    )
+
+    def fake_factory():
+        return sentinel_session
+
+    def fake_check(session, *, scope, client_ip, limit, window_seconds):
+        seen["session"] = session
+        seen["scope"] = scope
+        seen["client_ip"] = client_ip
+        return False, 0.0
+    monkeypatch.setattr(ingress_module, "check_rate_limit", fake_check)
+    settings = _settings()
+    middleware = ingress_module.IngressMiddleware(
+        lambda scope, receive, send: None,
+        settings=settings,
+        session_factory=fake_factory,
+    )
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/login",
+        "client": ("203.0.113.9", 12345),
+        "headers": [(b"host", b"testserver")],
+    }
+    headers = Headers(scope=scope)
+    assert middleware._rate_limited(scope, headers) is True
+    assert seen["session"] is sentinel_session
+    assert seen["scope"] == "login"
+    assert seen["client_ip"] == "203.0.113.9"
+    assert seen["closed"] is True
+
+
+def test_ingress_rate_limit_failure_is_logged_fail_open(monkeypatch, caplog) -> None:
+    import logging
+
+    from starlette.datastructures import Headers
+
+    from app.api import ingress as ingress_module
+
+    def broken_factory():
+        raise RuntimeError("database is down")
+
+    settings = _settings()
+    middleware = ingress_module.IngressMiddleware(
+        lambda scope, receive, send: None,
+        settings=settings,
+        session_factory=broken_factory,
+    )
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/login",
+        "client": ("203.0.113.9", 12345),
+        "headers": [(b"host", b"testserver")],
+    }
+    headers = Headers(scope=scope)
+    with caplog.at_level(logging.INFO, logger="leadops"):
+        # Deliberate fail-open: the request is not rate-limited.
+        assert middleware._rate_limited(scope, headers) is False
+    assert "RuntimeError" in caplog.text
+    assert "database is down" not in caplog.text
+
+
 def test_proxy_missing_client_is_none() -> None:
     settings = _settings(trusted_proxies=("10.0.0.0/8",))
     assert effective_client_ip(_request(None, xff="1.2.3.4"),

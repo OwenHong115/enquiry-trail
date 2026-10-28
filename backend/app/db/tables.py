@@ -222,3 +222,13 @@ worker_heartbeats = Table(
     Column("last_seen_at", DateTime(timezone=True), nullable=False),
     Column("active_job_count", Integer, nullable=False),
 )
+
+rate_limit_counters = Table(
+    "rate_limit_counters",
+    metadata,
+    Column("scope", String(40), primary_key=True),
+    Column("subject_hash", String(64), primary_key=True),
+    Column("window_start", DateTime(timezone=True), primary_key=True),
+    Column("count", Integer, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+)

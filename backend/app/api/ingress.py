@@ -25,10 +25,13 @@ from starlette.responses import JSONResponse
 
 from app.api.errors import error_body
 from app.logging import log_event
+from app.security.proxy import effective_client_ip
+from app.security.ratelimit import check_rate_limit
 from app.settings import Settings
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _PUBLIC_PREFIX = "/api/v1/health/"
+_RATE_LIMITED_PATHS = {"/api/v1/intake/form": "intake", "/api/v1/auth/login": "login"}
 
 
 # Oversized bodies are rejected by IngressMiddleware itself,
@@ -45,10 +48,52 @@ def _envelope(scope, status: int, code: str, message: str) -> JSONResponse:
 
 
 class IngressMiddleware:
-    def __init__(self, app, settings: Settings) -> None:
+    def __init__(self, app, settings: Settings, session_factory=None) -> None:
         self.app = app
         self.allowed_origins = set(settings.resolved_allowed_origins())
         self.max_bytes = settings.max_request_bytes
+        self.settings = settings
+        # Application session factory, injected by the composition
+        # root. The middleware never builds its own engine.
+        self._session_factory = session_factory
+
+    def _resolve_session_factory(self, scope):
+        if self._session_factory is not None:
+            return self._session_factory
+        app = scope.get("app")
+        state = getattr(app, "state", None)
+        return getattr(state, "session_factory", None)
+
+    def _rate_limited(self, scope, headers) -> bool:
+        scope_name = _RATE_LIMITED_PATHS.get(scope.get("path", ""))
+        if scope_name is None or scope.get("method") != "POST":
+            return False
+        try:
+            factory = self._resolve_session_factory(scope)
+            if factory is None:
+                raise RuntimeError("rate limit session factory is not configured")
+            from types import SimpleNamespace
+            client = scope.get("client")
+            stub = SimpleNamespace(client=SimpleNamespace(host=client[0]) if client else None, headers=headers)
+            client_ip = effective_client_ip(stub, self.settings.trusted_proxy_networks())
+            limit = self.settings.rate_limit_intake_max if scope_name == "intake" else self.settings.rate_limit_login_max
+            session = factory()
+            try:
+                allowed, _retry = check_rate_limit(session, scope=scope_name, client_ip=client_ip, limit=limit, window_seconds=self.settings.rate_limit_window_seconds)
+            finally:
+                session.close()
+            return not allowed
+        except Exception as exc:
+            # Deliberate fail-open: a rate-limit backend fault must
+            # not take down intake or login, but it is never silent.
+            # Only the error class name is logged, never its message.
+            log_event(
+                "rate_limit.check_failed",
+                error_code=type(exc).__name__,
+                scope=scope_name,
+                path=scope.get("path", ""),
+            )
+            return False
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -72,6 +117,12 @@ class IngressMiddleware:
                 )
                 await response(scope, receive, send)
                 return
+
+        if self._rate_limited(scope, headers):
+            response = _envelope(scope, 429, "rate_limited", "Rate limit exceeded")
+            log_event("http.request", request_id=scope["state"]["request_id"], method=method, path=path, status=429)
+            await response(scope, receive, send)
+            return
 
         content_length = headers.get("content-length")
         if content_length is not None:

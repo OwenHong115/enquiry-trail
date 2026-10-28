@@ -10,7 +10,7 @@ from fastapi.openapi.utils import get_openapi
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
-    auth, enquiries, health, intake, integrations, jobs, reviews, tasks,
+    auth, enquiries, health, intake, integrations, jobs, reviews, tasks, webhook,
 )
 from app.api.errors import ApiError, ErrorEnvelope, envelope_response, error_response
 from app.api.ingress import IngressMiddleware
@@ -70,7 +70,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return response
 
-    app.add_middleware(IngressMiddleware, settings=settings)
+    app.add_middleware(
+        IngressMiddleware, settings=settings, session_factory=app.state.session_factory
+    )
 
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError):
@@ -146,6 +148,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jobs.router)
     app.include_router(integrations.router)
     app.include_router(integrations.workers_router)
+    app.include_router(webhook.router)
 
     def build_openapi() -> dict:
         # Schema metadata only: declare the session-cookie scheme
@@ -163,7 +166,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "name": auth.COOKIE_NAME,
             }
         }
-        public_paths = {"/api/v1/auth/login", "/api/v1/health/live", "/api/v1/health/ready"}
+        public_paths = {"/api/v1/auth/login", "/api/v1/health/live", "/api/v1/health/ready", "/api/v1/webhooks/intake"}
         for path, path_item in schema.get("paths", {}).items():
             if path.startswith("/api/v1/") and path not in public_paths:
                 for method, operation in path_item.items():
