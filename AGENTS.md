@@ -125,17 +125,30 @@ A07 is proven only for the schema half until the domain phone rejection is green
 
 ## Working protocol
 
-- Red before green. Write one failing behavioural test per slice, confirm it fails because
-  behaviour is missing, then implement.
-- Separate commits: `test(<slice>): ...`, `feat(<slice>): ...`, `fix(...)`, `chore: ...`.
-  A feature commit touches `backend/app/` only. Test edits ride in their own commit and
-  need operator approval.
+Test-first is required. A separate red commit is not.
+
+- A behaviour defect starts with a regression test that reproduces it. Record what failed
+  before the fix and what the fix verifies. The failing state may be committed or not; it
+  is evidence, not a delivery unit.
+- One commit is one complete logical change: implementation, its tests, and any doc change
+  that belongs to it, together. Name it for what changed: `fix(worker): ...` for a defect,
+  `feat(jobs): ...` for new capability. The type describes the change, not the phase of the
+  cycle in which it was written.
+- A commit may touch tests, app code and docs at once when they form one change. Changing an
+  existing expectation needs a stated reason - contract change, wrong assertion, or
+  implementation coupling - in the commit body or the report.
+- Development branches may be red while work is in progress. The merge gate is green CI on
+  the exact commit that lands; a local run or an earlier commit does not substitute for it.
+  Small PRs squash by default; a PR carrying several independent fixes may keep one commit
+  per fix, each verifiable on its own.
 - Never weaken, delete or reorder an assertion to reach green. If a test is contradictory,
   stop and report the exact line.
 - Fake and support modules may gain capability additively; existing call sites must behave
   unchanged.
 - A test run that is not pasted did not happen. Reports state the real failing set, not the
   intended one.
+
+See `docs/development-process.md` for the full policy, its rationale and the merge gate.
 
 ## Acceptance evidence
 
