@@ -321,3 +321,17 @@ fault_claims = Table(
     Column("result_json", JSONB, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")),
 )
+notifications = Table(
+    "notifications",
+    metadata,
+    Column("id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("enquiry_id", Uuid),
+    Column("kind", String(160), nullable=False),
+    Column("status", Text, nullable=False, server_default=text("'pending'")),
+    Column("operation_key", String(256), nullable=False, unique=True),
+    Column("last_attempt_at", DateTime(timezone=True)),
+    Column("last_error_code", Text),
+    UniqueConstraint("enquiry_id", "kind", name="uq_notifications_enquiry_kind"),
+    CheckConstraint("status IN ('pending', 'sent', 'disabled', 'delivery_unknown', 'failed')", name="ck_notifications_status"),
+    CheckConstraint("last_error_code IN ('connect_failed', 'rate_limited', 'unavailable', 'auth_failed', 'validation_failed', 'not_found', 'conflict', 'result_unknown', 'invalid_response', 'director_unavailable')", name="ck_notifications_last_error_code"),
+)

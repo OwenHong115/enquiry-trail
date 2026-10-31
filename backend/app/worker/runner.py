@@ -27,7 +27,9 @@ from app.db.session import make_engine, make_session_factory
 from app.logging import configure_logging, log_event
 from app.ports.clock import BusinessClock
 from app.ports.crm import CrmPort, ProviderError
+from app.ports.notifications import NotificationPort
 from app.ports.scheduler import Scheduler
+from app.services import notifications as notification_service
 from app.services.clock import SystemBusinessClock
 from app.settings import Settings
 from app.ports.extraction import ExtractorPort
@@ -84,6 +86,7 @@ def run_once(
     claim_observer: Callable[[bool], None] | None = None,
     extractor: ExtractorPort | None = None,
     extraction_profile: extraction_service.ExtractionProfile | None = None,
+    notifications: NotificationPort | None = None,
 ) -> bool:
     """Claim and handle at most one due job (True when one was handled).
 
@@ -108,7 +111,21 @@ def run_once(
         )
         heartbeat_thread.start()
     try:
-        handle_claim(session, claim, clock, crm=crm, scheduler=scheduler, extractor=extractor, extraction_profile=extraction_profile)
+        handle_claim(session, claim, clock, crm=crm, scheduler=scheduler, extractor=extractor, extraction_profile=extraction_profile, notifications=notifications)
+        if notifications is not None and claim.kind == "sync_contact":
+            # Separate transaction after the sync committed: a
+            # notification enqueue failure never rolls back sync.
+            try:
+                with session.begin():
+                    notification_service.maybe_enqueue_ready_notification(
+                        session, claim.entity_id, enabled=True, now=clock.now_utc()
+                    )
+            except Exception as notify_err:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+                log_event("notification.enqueue_error", job_id=str(claim.job_id), error_code=type(notify_err).__name__)
     except Exception as err:
         session.rollback()
         log_event(
@@ -148,6 +165,7 @@ def run_until_idle(
     heartbeat_interval_seconds: float = 5.0,
     extractor: ExtractorPort | None = None,
     extraction_profile: extraction_service.ExtractionProfile | None = None,
+    notifications: NotificationPort | None = None,
 ) -> int:
     """Run jobs until none is due; return how many were handled."""
     handled = 0
@@ -156,7 +174,8 @@ def run_until_idle(
         try:
             if not run_once(session, worker_id, clock, crm, scheduler,
                             heartbeat_interval_seconds=heartbeat_interval_seconds,
-                            extractor=extractor, extraction_profile=extraction_profile):
+                            extractor=extractor, extraction_profile=extraction_profile,
+                            notifications=notifications):
                 break
         finally:
             session.close()
@@ -206,6 +225,7 @@ def run_forever(
     heartbeat_interval_seconds: float | None = None,
     extractor: ExtractorPort | None = None,
     extraction_profile: extraction_service.ExtractionProfile | None = None,
+    notifications: NotificationPort | None = None,
 ) -> int:
     """Run persistently until stop_event is set; return jobs handled.
 
@@ -262,7 +282,8 @@ def run_forever(
                                heartbeat_interval_seconds=job_heartbeat,
                                claim_observer=_set_active,
                                extractor=extractor,
-                               extraction_profile=extraction_profile)
+                               extraction_profile=extraction_profile,
+                               notifications=notifications)
                 if did:
                     with lock:
                         handled[0] += 1
@@ -342,6 +363,16 @@ def _resolve_crm(settings: Settings | None = None) -> CrmPort:
     )
 
 
+def _resolve_notifications(settings: Settings | None = None):
+    """Resolve the notification port; disabled returns None, never a fake."""
+    from app.adapters.notifications_sim import HttpNotificationAdapter
+
+    settings = settings or Settings.from_env()
+    if settings.slack_mode == "disabled":
+        return None
+    return HttpNotificationAdapter(settings.slack_base_url, settings.slack_token)
+
+
 def _resolve_extractor(settings: Settings | None = None) -> ExtractorPort:
     """Resolve the extractor from settings; connected never falls back."""
     from app.adapters.extraction_fixture import FixtureExtractor
@@ -376,6 +407,7 @@ def main() -> None:
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
     crm = _resolve_crm(settings)
+    notifications = _resolve_notifications(settings)
     extractor = _resolve_extractor(settings)
     extraction_profile = _extraction_profile(settings)
     stop_event = threading.Event()
@@ -404,6 +436,7 @@ def main() -> None:
             error_backoff_seconds=settings.worker_error_backoff_seconds,
             stop_event=stop_event,
             extractor=extractor, extraction_profile=extraction_profile,
+            notifications=notifications,
         )
     except WorkerUncleanShutdown:
         # Slots may still be alive: do not close the adapter or
@@ -414,6 +447,9 @@ def main() -> None:
             close = getattr(crm, "close", None)
             if close is not None:
                 close()
+            notify_close = getattr(notifications, "close", None)
+            if notify_close is not None:
+                notify_close()
             engine.dispose()
         log_event("worker.shutdown_complete", worker_id=str(worker_id), clean=clean)
     if not clean:

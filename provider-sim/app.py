@@ -27,6 +27,8 @@ _contacts: dict[str, dict] = {}
 _by_email: dict[str, str] = {}
 _counts = {"lookup_email": 0, "lookup_id": 0, "create": 0, "patch": 0, "probe": 0}
 _fault = {"mode": "none", "path": "any"}
+_slack_messages: dict[str, dict] = {}
+_slack_order: list[str] = []
 
 
 def _take_fault(path: str) -> str:
@@ -139,6 +141,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, {"ok": True, "supports_patch": True})
             return
+        if path == "/__test__/slack_messages":
+            with _lock:
+                self._send(200, {"messages": [dict(_slack_messages[k]) for k in _slack_order], "count": len(_slack_order)})
+            return
         if path.startswith("/contacts/by-email/"):
             with _lock:
                 _counts["lookup_email"] += 1
@@ -175,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/__test__/reset":
             self._body()
             with _lock:
-                _contacts.clear(); _by_email.clear()
+                _contacts.clear(); _by_email.clear(); _slack_messages.clear(); _slack_order.clear()
                 for key in _counts:
                     _counts[key] = 0
                 _fault["mode"] = "none"; _fault["path"] = "any"
@@ -187,6 +193,35 @@ class Handler(BaseHTTPRequestHandler):
                 _fault["mode"] = str(body.get("mode", "none"))
                 _fault["path"] = str(body.get("path", "any"))
             self._send(200, {"ok": True})
+            return
+        if path == "/slack/messages":
+            if not self._auth_ok():
+                self._send(401, {"error": "unauthorized"})
+                return
+            body = self._body()
+            if not body.get("operation_key") or not body.get("text"):
+                self._send(422, {"error": "validation_failed"})
+                return
+            def _commit_slack():
+                with _lock:
+                    key = str(body["operation_key"])
+                    existing = _slack_messages.get(key)
+                    if existing is not None:
+                        return existing
+                    msg = {"id": f"slack-{uuid.uuid4().hex[:12]}", "operation_key": key,
+                           "enquiry_id": body.get("enquiry_id"), "text": body.get("text"),
+                           "channel": body.get("channel")}
+                    _slack_messages[key] = msg
+                    _slack_order.append(key)
+                    return msg
+            mode = _take_fault("slack")
+            if mode == "drop_success_response":
+                committed = _commit_slack()
+                self._send(500, {"error": "internal_after_commit"})
+                return
+            if self._fault(mode):
+                return
+            self._send(201, _commit_slack())
             return
         if path == "/contacts":
             with _lock:
