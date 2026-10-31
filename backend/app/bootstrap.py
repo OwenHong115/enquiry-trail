@@ -52,7 +52,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # may replace app.state.crm with a fake.
     app.state.crm = _resolve_crm(settings)
     app.state.notifications = _resolve_notifications(settings)
-    app.state.notification_enabled = settings.slack_mode != "disabled"
     app.state.extractor = _resolve_extractor(settings)
     app.state.extraction_profile = _extraction_profile(settings)
     engine = make_engine(settings.database_url)
