@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import intake_repo, job_repo
@@ -41,6 +41,16 @@ class IntakeResult:
 
 class IdempotencyConflict(Exception):
     """The (source, event_key) was already used with a different payload."""
+
+
+class IntakeUnavailableError(Exception):
+    """The intake transaction failed at the database layer.
+
+    The transaction rolled back atomically, so the caller may retry
+    with the same Idempotency-Key. Programming and configuration
+    errors (for example the routing-owner ValueError) never become
+    this error; they propagate unchanged.
+    """
 
 
 class _ReceiptUniqueViolation(Exception):
@@ -390,23 +400,32 @@ def submit_intake(
             clock=clock,
             routing_config=routing_config,
         )
+    except SQLAlchemyError as err:
+        raise IntakeUnavailableError(
+            "intake database transaction failed"
+        ) from err
     except _ReceiptUniqueViolation as violation:
-        with session.begin():
-            existing = intake_repo.get_receipt_by_key(
-                session, source, event_key
-            )
-            if existing is None or (
-                existing.payload_hash != violation.payload_hash
-            ):
-                raise IdempotencyConflict(
-                    f"event_key {event_key} was used with a different payload"
+        try:
+            with session.begin():
+                existing = intake_repo.get_receipt_by_key(
+                    session, source, event_key
                 )
-            return IntakeResult(
-                enquiry_id=existing.enquiry_id,
-                receipt_id=existing.id,
-                deduplication=existing.deduplication,
-                replayed=True,
-                display_no=intake_repo.get_display_no(
-                    session, existing.enquiry_id
-                ),
-            )
+                if existing is None or (
+                    existing.payload_hash != violation.payload_hash
+                ):
+                    raise IdempotencyConflict(
+                        f"event_key {event_key} was used with a different payload"
+                    )
+                return IntakeResult(
+                    enquiry_id=existing.enquiry_id,
+                    receipt_id=existing.id,
+                    deduplication=existing.deduplication,
+                    replayed=True,
+                    display_no=intake_repo.get_display_no(
+                        session, existing.enquiry_id
+                    ),
+                )
+        except SQLAlchemyError as err:
+            raise IntakeUnavailableError(
+                "intake database transaction failed"
+            ) from err
