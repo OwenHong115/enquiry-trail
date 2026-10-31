@@ -12,3 +12,8 @@ node_modules/
 .coverage
 htmlcov/
 coverage.xml
+.muse/
+.worktrees/
+EnquiryTrail-plan-update-20261025/
+playwright-report/
+test-results/
