@@ -91,7 +91,7 @@ Flow covered through labelled UI controls only:
 1. Signed in as the seeded demo operator.
 2. Submitted a quote through the Quote page (including a postcode, so
    the enquiry does not require review for `missing_postcode`).
-3. Saw the enquiry (`ENQ-…`) appear in the Enquiries list.
+3. Saw the enquiry (for example `ENQ-000001`) appear in the Enquiries list.
 4. Opened its detail, confirmed the synthetic-data badge and the detail
    reaching `ready (attention: none)` with CRM `synced` via polling.
 5. Completed the follow-up task from the Tasks page with a valid reason.
