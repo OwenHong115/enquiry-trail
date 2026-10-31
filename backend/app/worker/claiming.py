@@ -22,6 +22,8 @@ from app.ports.crm import (
 )
 from app.ports.scheduler import Scheduler
 from app.ports.extraction import ExtractorPort
+from app.ports.notifications import NotificationPort
+from app.services import notifications as notification_service
 from app.services import crm_sync, health
 from app.services import extraction as extraction_service
 from app.services.scheduler import BackoffScheduler
@@ -768,6 +770,7 @@ def handle_claim(
     scheduler: Scheduler | None = None,
     extractor: ExtractorPort | None = None,
     extraction_profile: extraction_service.ExtractionProfile | None = None,
+    notifications: NotificationPort | None = None,
 ) -> None:
     """Execute one claimed job.
 
@@ -779,6 +782,13 @@ def handle_claim(
     create; the prepare path keeps its single transaction.
     """
     _ai_fault_mode = None
+    if claim.kind == "notify_ready":
+        if notifications is None:
+            raise ValueError("notify_ready requires a notification port")
+        notification_service.handle_notify_claim(
+            session, claim, clock, notifications, scheduler=scheduler
+        )
+        return
     if claim.kind == "sync_contact":
         if crm is None:
             raise ValueError("sync_contact requires a CRM port")

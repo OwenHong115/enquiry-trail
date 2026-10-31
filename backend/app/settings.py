@@ -63,6 +63,10 @@ class Settings:
     extractor_mode: str = "fixture"
     extractor_model: str = "fixture-model"
     extractor_prompt_version: str = "v1"
+    slack_mode: str = "disabled"
+    slack_base_url: str = ""
+    slack_token: str = ""
+    slack_channel: str = ""
 
     def __post_init__(self) -> None:
         # Fail fast: an empty secret makes CSRF tokens computable
@@ -75,6 +79,16 @@ class Settings:
             raise ValueError("EXTRACTOR_PROMPT_VERSION must not be empty")
         if self.extractor_mode == "connected" and not self.extractor_model.strip():
             raise ValueError("EXTRACTOR_MODEL is required in connected mode")
+        if self.slack_mode not in ("disabled", "sim", "http"):
+            raise ValueError("SLACK_MODE must be disabled, sim or http")
+        if self.slack_mode in ("sim", "http") and not (
+            self.slack_base_url.strip() and self.slack_token.strip()
+        ):
+            raise ValueError("SLACK_BASE_URL and SLACK_TOKEN are required when Slack is enabled")
+        if self.slack_base_url.strip():
+            parsed_slack = urlparse(self.slack_base_url)
+            if parsed_slack.scheme not in ("http", "https") or not parsed_slack.hostname:
+                raise ValueError("SLACK_BASE_URL must be an http(s) URL with a host")
         if self.crm_mode not in ("mock", "http"):
             raise ValueError("CRM_MODE must be mock or http")
         # In http mode missing config fails startup; never fall back.
@@ -188,4 +202,8 @@ class Settings:
                 else os.environ.get("EXTRACTOR_MODEL", "fixture-model")
             ),
             extractor_prompt_version=os.environ.get("EXTRACTOR_PROMPT_VERSION", "v1"),
+            slack_mode=os.environ.get("SLACK_MODE", "disabled"),
+            slack_base_url=os.environ.get("SLACK_BASE_URL", ""),
+            slack_token=os.environ.get("SLACK_TOKEN", ""),
+            slack_channel=os.environ.get("SLACK_CHANNEL", ""),
         )

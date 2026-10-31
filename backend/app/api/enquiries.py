@@ -14,7 +14,7 @@ from app.api.auth import COOKIE_NAME
 from app.api.deps import require_authenticated, require_operator
 from app.api.display import format_display_no
 from app.api.errors import ApiError, ErrorEnvelope
-from app.db import draft_repo, enquiry_repo, enrichment_repo, health_repo
+from app.db import draft_repo, enquiry_repo, enrichment_repo, health_repo, notification_repo
 from app.db.session import get_session
 from app.security import sessions as session_service
 from app.services import drafts, owner, read_model
@@ -341,8 +341,16 @@ def build_enquiry_detail(
         task=task,
         enrichment=enrichment,
         draft=_draft_out(session, enquiry_id),
-        notification=NotificationOut(
-            status="disabled", notification_id=None, last_error_code=None
+        notification=(
+            NotificationOut(
+                status=_notif_row.status,
+                notification_id=_notif_row.id,
+                last_error_code=_notif_row.last_error_code,
+            )
+            if (_notif_row := notification_repo.get_notification(session, enquiry_id)) is not None
+            else NotificationOut(
+                status="disabled", notification_id=None, last_error_code=None
+            )
         ),
         local_prepared_at=detail.local_prepared_at,
         required_contact_version=detail.required_contact_version,
