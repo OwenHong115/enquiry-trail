@@ -22,7 +22,11 @@ from app.api.errors import ApiError
 from app.db.session import get_session
 from app.domain.normalization import normalize_phone
 from app.security import sessions as session_service
-from app.services.intake import IdempotencyConflict, submit_intake
+from app.services.intake import (
+    IdempotencyConflict,
+    IntakeUnavailableError,
+    submit_intake,
+)
 
 router = APIRouter(prefix="/api/v1/intake", tags=["intake"])
 
@@ -81,8 +85,10 @@ def intake_form(
         raise ApiError(403, "csrf_invalid", "CSRF token is missing or invalid")
 
     # 3. Domain phone validation, once, before the service: only
-    # this ValueError becomes a 422. Anything the service raises
-    # (including its configuration ValueErrors) stays a 500.
+    # this ValueError becomes a 422. Service configuration errors
+    # (including its routing-owner ValueError) stay a 500, while
+    # database/transaction failures arrive as the typed
+    # IntakeUnavailableError and map to 503 below.
     try:
         normalize_phone(payload.phone)
     except ValueError as err:
@@ -109,6 +115,10 @@ def intake_form(
     except IdempotencyConflict as err:
         raise ApiError(
             409, "idempotency_conflict", "Idempotency key conflict"
+        ) from err
+    except IntakeUnavailableError as err:
+        raise ApiError(
+            503, "service_unavailable", "Service temporarily unavailable"
         ) from err
 
     # 6. The receipt.
