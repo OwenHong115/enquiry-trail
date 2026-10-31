@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import timezone
 
 from sqlalchemy.orm import Session
@@ -27,7 +28,12 @@ from app.db.session import make_engine, make_session_factory
 from app.logging import configure_logging, log_event
 from app.ports.clock import BusinessClock
 from app.ports.crm import CrmPort, ProviderError
-from app.ports.notifications import NotificationPort
+from app.ports.notifications import (
+    NotificationContext,
+    NotificationPort,
+    NotificationSent,
+    ReadyNotification,
+)
 from app.ports.scheduler import Scheduler
 from app.services import notifications as notification_service
 from app.services.clock import SystemBusinessClock
@@ -363,6 +369,32 @@ def _resolve_crm(settings: Settings | None = None) -> CrmPort:
     )
 
 
+class _ConfiguredChannelNotifications:
+    """Notification port that stamps the configured Slack channel.
+
+    The ready message is built without a channel, so the configured
+    channel is applied here at the construction seam: an explicit
+    per-message channel wins, and an unconfigured channel leaves the
+    message unchanged.
+    """
+
+    def __init__(self, inner: NotificationPort, channel: str) -> None:
+        self._inner = inner
+        self._channel = channel
+
+    def send_ready(
+        self, message: ReadyNotification, context: NotificationContext
+    ) -> NotificationSent:
+        if message.channel is None:
+            message = replace(message, channel=self._channel)
+        return self._inner.send_ready(message, context)
+
+    def close(self) -> None:
+        close = getattr(self._inner, "close", None)
+        if close is not None:
+            close()
+
+
 def _resolve_notifications(settings: Settings | None = None):
     """Resolve the notification port; disabled returns None, never a fake."""
     from app.adapters.notifications_sim import HttpNotificationAdapter
@@ -370,7 +402,11 @@ def _resolve_notifications(settings: Settings | None = None):
     settings = settings or Settings.from_env()
     if settings.slack_mode == "disabled":
         return None
-    return HttpNotificationAdapter(settings.slack_base_url, settings.slack_token)
+    adapter = HttpNotificationAdapter(settings.slack_base_url, settings.slack_token)
+    channel = settings.slack_channel.strip()
+    if not channel:
+        return adapter
+    return _ConfiguredChannelNotifications(adapter, channel)
 
 
 def _resolve_extractor(settings: Settings | None = None) -> ExtractorPort:

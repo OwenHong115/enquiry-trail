@@ -66,6 +66,10 @@ services:
       CRM_MODE: ${CRM_MODE:-mock}
       CRM_BASE_URL: ${CRM_BASE_URL:-http://provider-sim:8091}
       CRM_TOKEN: ${CRM_TOKEN:-sim-token}
+      SLACK_MODE: ${SLACK_MODE:-disabled}
+      SLACK_BASE_URL: ${SLACK_BASE_URL:-}
+      SLACK_TOKEN: ${SLACK_TOKEN:-}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -86,9 +90,13 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
       SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
-      CRM_MODE: mock
-      CRM_BASE_URL: http://provider-sim:8091
+      CRM_MODE: ${CRM_MODE:-mock}
+      CRM_BASE_URL: ${CRM_BASE_URL:-http://provider-sim:8091}
       CRM_TOKEN: ${CRM_TOKEN:-sim-token}
+      SLACK_MODE: ${SLACK_MODE:-disabled}
+      SLACK_BASE_URL: ${SLACK_BASE_URL:-}
+      SLACK_TOKEN: ${SLACK_TOKEN:-}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:-}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
     depends_on:
       migrate:
