@@ -307,6 +307,51 @@ def test_http_sim_a20_drop_success_is_unknown_one_message(sim, postgres_db: str)
     assert len(_slack_messages(sim)) == 1
 
 
+def test_a19_duplicate_idempotency_key_intake_sends_exactly_once(
+    sim, postgres_db: str, api_client
+) -> None:
+    from app.settings import Settings
+    from app.worker.runner import _resolve_notifications
+
+    clock = FakeClock(datetime.now(timezone.utc))
+    key = uuid.uuid4()
+    headers = {
+        "Idempotency-Key": str(key),
+        "X-CSRF-Token": api_client.csrf_token,  # type: ignore[attr-defined]
+    }
+    first = api_client.post(
+        "/api/v1/intake/form", json=_payload(), headers=headers
+    )
+    assert first.status_code == 202, first.text
+    assert first.json()["replayed"] is False
+    second = api_client.post(
+        "/api/v1/intake/form", json=_payload(), headers=headers
+    )
+    assert second.status_code == 202, second.text
+    assert second.json()["replayed"] is True
+    assert second.json()["enquiry_id"] == first.json()["enquiry_id"]
+
+    settings = Settings(
+        database_url=postgres_db,
+        session_secret="test-session-secret",
+        slack_mode="sim",
+        slack_base_url=sim,
+        slack_token=TOKEN,
+        slack_channel="#enquiry-ready",
+    )
+    notifications = _resolve_notifications(settings)
+    clock.advance_by(3600)
+    _drain(postgres_db, clock, FakeCrm(), notifications=notifications)
+
+    rows = _notifications(postgres_db)
+    assert len(rows) == 1
+    assert rows[0].status == "sent"
+    messages = _slack_messages(sim)
+    assert len(messages) == 1
+    assert messages[0].get("channel") == "#enquiry-ready"
+    assert len(_events(postgres_db, "notification.sent")) == 1
+
+
 def test_http_sim_definite_auth_failure_is_failed(sim, postgres_db: str) -> None:
     clock = FakeClock(T0)
     adapter = HttpNotificationAdapter(sim, "wrong-token")
