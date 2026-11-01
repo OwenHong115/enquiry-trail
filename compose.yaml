@@ -55,7 +55,12 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
       SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
       APP_BASE_URL: http://127.0.0.1:8080
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      # The browser loads the UI from the web service on port 5173 and
+      # sends that exact Origin on every unsafe request. The API parses
+      # ALLOWED_ORIGINS before any route runs, so the web origin must be
+      # listed; an empty value here would fall back to APP_BASE_URL and
+      # reject the browser. Override for any non-default deployment.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://127.0.0.1:5173}
       MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-65536}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       RATE_LIMIT_INTAKE_MAX: ${RATE_LIMIT_INTAKE_MAX:-600}
