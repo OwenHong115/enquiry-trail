@@ -59,7 +59,7 @@ export default function TasksPage() {
         const tooShort = reason.length < 10;
         const fe = failedTaskId === t.id ? fieldError(actionError, "reason") : undefined;
         return (
-          <article key={t.id} className="task">
+          <article key={t.id} className="task" data-testid={`task-row-${t.enquiry.id}`}>
             <h2>{t.title}</h2>
             <p>{t.status} - due {new Date(t.due_at).toLocaleString()} - owner {t.owner.display_name}</p>
             <p>Enquiry <a href={`#/enquiries/${t.enquiry.id}`}>{t.enquiry.display_no}</a> ({t.enquiry.service_type})</p>
@@ -73,7 +73,7 @@ export default function TasksPage() {
                     if (failedTaskId === t.id) { setActionError(null); setFailedTaskId(null); }
                   }} />
                 {fe && <p id={`reason-${t.id}-err`} className="field-error">{fe}</p>}
-                <button type="button" disabled={tooShort} onClick={() => void act(t.id, t.version, "complete")}>Complete task</button>
+                <button type="button" disabled={tooShort} onClick={() => void act(t.id, t.version, "complete")}>Complete follow-up for {t.enquiry.display_no}</button>
                 <button type="button" disabled={tooShort} onClick={() => void act(t.id, t.version, "cancel")}>Cancel task</button>
               </div>
             )}
