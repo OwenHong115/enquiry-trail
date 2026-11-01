@@ -2,13 +2,13 @@
 
 ## Snapshot (2026-10-26)
 
-- Snapshot below is historical (2026-10-26). Current truth at docs
-  re-verification 2026-11-01: local `main` and this branch HEAD are
-  `a305db162285f5c65e1468ca563480b900587dac`, `origin/main` is
-  `5872be3a1a7a0ab6754ea4fea472d53beea3d39a` (0 behind, 26 ahead,
-  unpushed). Suites then: backend unit 156 passed, backend
-  integration 270 passed, frontend 14 passed - see
-  `docs/acceptance-log.md`.
+- Snapshot below is historical (2026-10-26). Measured at base
+  `a305db162285f5c65e1468ca563480b900587dac` on 2026-11-01: local
+  `main` was 0 behind / 26 ahead of `origin/main`
+  (`5872be3a1a7a0ab6754ea4fea472d53beea3d39a`). This docs branch and
+  subsequent local merges stay unpushed until the final push.
+  Suites then: backend unit 156 passed, backend integration 270
+  passed, frontend 14 passed - see `docs/acceptance-log.md`.
 - P0 closeout: local `fix/reliability` at `652ffd7` (10 commits
   `bc1a1c3..652ffd7`, ahead of `origin/fix/reliability`), carried onto the
   reviewable branch `fix/p0-closeout` plus two regression pins in

@@ -9,7 +9,7 @@ off any acceptance item; acceptance remains the operator's record.
 
 - Branch: `feat/e2e-browser-verification`
 - Worktree: `.worktrees/wt7`
-- Base at recording time: `cecf734`. Current HEAD at docs re-verification (2026-11-01, not a re-run): `a305db162285f5c65e1468ca563480b900587dac`
+- Base at recording time: `cecf734`. Measured at base `a305db162285f5c65e1468ca563480b900587dac` on 2026-11-01 (docs re-verification, not a re-run): that base was the measured commit; this docs branch and subsequent local merges stay unpushed until the final push.
 - Test commit: `1b3d3df` (`test(e2e): add signed-in browser verification against the real stack`)
 
 ## Changed files

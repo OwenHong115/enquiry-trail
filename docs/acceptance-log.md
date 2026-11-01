@@ -9,12 +9,14 @@ their own decision, date, and signature outside the automated suites.
 
 ## Run record (observed in this worktree)
 
-- Worktree: `.worktrees/wt15` on branch `docs/final-truth-closeout`
-  at HEAD `a305db162285f5c65e1468ca563480b900587dac` (same commit as
-  local `main`; `origin/main` is
-  `5872be3a1a7a0ab6754ea4fea472d53beea3d39a`;
-  `git rev-list --left-right --count origin/main...HEAD` -> `0 26`,
-  i.e. 0 behind, 26 ahead, unpushed). Last re-verified 2026-11-01.
+- Worktree: `.worktrees/wt15` on branch `docs/final-truth-closeout`.
+  Measured at base `a305db162285f5c65e1468ca563480b900587dac` on
+  2026-11-01: local `main` was at that same commit and was 0 behind /
+  26 ahead of `origin/main`
+  (`5872be3a1a7a0ab6754ea4fea472d53beea3d39a`;
+  `git rev-list --left-right --count origin/main...a305db1` ->
+  `0 26`). This docs branch and subsequent local merges stay
+  unpushed until the final push. Last re-verified 2026-11-01.
 - Backend unit: from `.worktrees/wt15/backend`, interpreter
   `backend/.venv/Scripts/python.exe` (main-tree venv; wt15 has no own
   venv) with `-m pytest tests/unit -q` -> **156 passed** in 9.87s.
@@ -30,13 +32,16 @@ their own decision, date, and signature outside the automated suites.
   matching `.github/workflows/ci.yml`: collecting both in one
   invocation fails on duplicate test-module basenames
   (`test_extraction.py`, `test_fault_demo.py` exist in both suites).
-- Ruff: `python -m ruff` in the main-tree venv reports
-  `No module named ruff`. The `ruff` binary on PATH (0.15.18) run as
-  `ruff check app tests` from `backend/` reports 1 error:
-  `F401 timedelta imported but unused` at
-  `backend/tests/integration/test_api_auth.py:251`. That is a code
-  finding on this head, recorded here and in `docs/checklist.md`;
-  it is not fixed in this docs-only branch.
+- Ruff: `ruff check app tests` is clean after `37cfa17` (merged as
+  `1a63d02`). Verified in this worktree after merging `main`: PATH
+  `ruff` 0.15.18 run as `ruff check app tests` from
+  `.worktrees/wt15/backend` reports `All checks passed!` (exit 0).
+  (`python -m ruff` in the main-tree venv reports
+  `No module named ruff`.) The earlier F401
+  (`timedelta imported but unused` at
+  `backend/tests/integration/test_api_auth.py`) is fixed by that
+  merge. H03 still OPEN only because no GitHub Actions run has been
+  observed (see `docs/checklist.md`).
 - Frontend: `npm ci` in `frontend/`, then `npm run test` ->
   **2 test files passed, 14 tests passed**; `npm run build` passed
   (`tsc -b && vite build`); `npm run lint` (ESLint) exited 0.
@@ -101,7 +106,7 @@ part that is not asserted.
   frontend evidence here with Playwright cited from
   `docs/e2e-browser-evidence.md`. Counts behind this summary:
   backend unit 156 passed, backend integration 270 passed,
-  frontend 14 passed (all observed 2026-11-01, HEAD `a305db1`).
+  frontend 14 passed (all observed 2026-11-01 at base `a305db1`).
 - Partial: A14 (job-lease crash evidence, no real process kill),
   A22 (no dedicated injection case).
 - No automated evidence: A26, A30, C01, C02. C01/C02 are excluded
