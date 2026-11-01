@@ -179,10 +179,16 @@ shapes are strict subsets of the existing detail/task public fields:
 ## Delivery boundaries (not implemented features)
 
 - Adapter and simulator exist (P1a); the persistent worker loop,
-  heartbeat, seed and Compose exist (P1b); no UI (P4); Origin/body/
-  trusted-proxy hardening exists (P3a) while rate limits and signed
-  webhooks are still pending (P3b/P3c); no connected/live CRM; no
-  acceptance signoff.
+  heartbeat, seed and Compose exist (P1b); UI exists (P4);
+  Origin/body/trusted-proxy hardening (P3a), rate limits and
+  signed webhooks (P3b/P3c) all exist; Slack notifications, fault
+  demonstration and extraction exist; no connected/live CRM
+  verification (connected mode UNVERIFIED pending M0); no
+  acceptance signoff. Contract-side clarification for the
+  cycle-closure/intake-timing item below is recorded as a
+  follow-up for the planned contract revision; nothing here
+  redefines the external contract package (outside this repo,
+  not vendored - see C01/C02 in `docs/acceptance-log.md`).
 - Public deployment hardening (HTTPS cookie policy, origin policy, rate limiting,
   request-size controls) is P3/P7 work, not authorized by this slice.
 - Readiness uses bounded pool checkout (1s), connection establishment (2s) and SQL

@@ -98,7 +98,7 @@ security (exact Origin, body-size bound, rate limits, trusted proxy,
 signed webhook); P4 core UI and template drafts; P5 AI extraction and
 fallback; P6 controlled failure demonstration; P7 connected verification
 and handover. UI is P4 and intake security is P3, never P2.
-P1a (this branch) delivers the HTTP CRM adapter and provider simulator. Still missing: persistent worker loop (P1b), P2 business operations, P3 intake security, and the UI (P4).
+All of P1a, P1b, P2, P3, P4, P5 and P6 are implemented on local `main` (see the status table below). P7 connected verification remains UNVERIFIED pending M0 (see `docs/connected-handover.md`).
 
 | Area | Status |
 |---|---|
@@ -112,16 +112,15 @@ P1a (this branch) delivers the HTTP CRM adapter and provider simulator. Still mi
 | S7b intake endpoint | complete |
 | S7c read endpoints and the detail shape | complete |
 | S7d operator actions and conflict mapping | complete |
-| S7e webhook, rate limits, origin and proxy handling | origin/body/trusted-proxy implemented on feat/p3-ingress-hardening (P3a); rate limits and signed webhooks planned (P3b/P3c) |
-| S8 extraction and fault injection | planned (P5 AI extraction; fault demonstration P6) |
-| P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | locally complete on fix/p0-closeout; merge/CI gate in docs/closeout-review.md |
-| P1a HTTP CRM adapter + provider simulator | implemented on feat/crm-http-adapter (stacked on P0 until P0 merges); PR 2 |
-| P1b persistent worker, heartbeat, seed, Compose | worker runtime, seed, API entrypoint, Dockerfiles and Compose implemented on feat/p1b-persistent-worker (P1b-1/P1b-2, locally verified; see docs/development-plan.md) |
-| P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | A32 contact-version coordination implemented on feat/p2-contact-version (remote field updates proven by integration tests; acceptance remains operator-signed); changed contact data is a new enquiry under the existing canonical fingerprint (strict dedup, no content-only dedup); enquiry/task lists implemented on feat/p2-enquiry-task-lists; A33 event timeline implemented on feat/p2-event-timeline (acceptance remains operator-signed); integration status/resume and worker health implemented on feat/p2-integrations-workers; owner actions planned (P2) |
-| S9 UI, delivery | UI planned (P4); connected verification/handover P7; still missing |
+| S7e webhook, rate limits, origin and proxy handling | complete: exact Origin, body bound, trusted proxy (P3a), rate limits and signed webhook (P3b/P3c) implemented and covered by integration tests |
+| S8 extraction and fault injection | complete: AI extraction with fixture/template adapters and fallback (P5) and the controlled fault demonstration (P6) implemented; extraction fixture and 20-case matrix covered by tests |
+| P0 reliability closeout (bc1a1c3..652ffd7 + regression pins) | complete on local `main`; merge/CI gate wording in docs/closeout-review.md is historical (2026-10-26) - current CI gate is H03 in docs/checklist.md |
+| P1a HTTP CRM adapter + provider simulator | complete on local `main` (HTTP CRM adapter, ChargeManager-free, plus independent provider simulator) |
+| P1b persistent worker, heartbeat, seed, Compose | complete on local `main`: persistent worker loop, heartbeat rows and `GET /api/v1/health/workers`, seed, Compose stack |
+| P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | complete on local `main`: A32 contact-version coordination, enquiry/task lists, A33 event timeline, owner actions, integration status/resume and worker health all implemented (acceptance remains operator-signed); changed contact data is a new enquiry under the existing canonical fingerprint (strict dedup, no content-only dedup) |
+| S9 UI, delivery | UI complete (P4 core UI implemented); Slack notifications and fault demo implemented; connected mode implemented but UNVERIFIED pending M0 (P7, see docs/connected-handover.md); `scripts/perf_measure.py` and `docs/perf-evidence.md` record a local sample only |
 
-Deferred acceptance items: A13, A18, A19, A20, A22, A23, A26, A27, A29, A30, A32, A33.
-A07 is proven only for the schema half until the domain phone rejection is green.
+Acceptance verdicts all stay PENDING OPERATOR in `docs/acceptance-log.md`. Items without automated evidence there: A26, A30, C01, C02 (C01/C02 excluded by the external contract-package boundary); A14/A22 are PARTIAL. Connected mode (M0 O01-O04) is UNVERIFIED.
 
 ## Working protocol
 

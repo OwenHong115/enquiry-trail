@@ -2,8 +2,13 @@
 
 ## Snapshot (2026-10-26)
 
-- `main` / `origin/main`: `0156c67` (Merge PR #1, fix/reliability R16).
-  `git fetch origin` on 2026-10-26 confirmed main had not moved.
+- Snapshot below is historical (2026-10-26). Measured at base
+  `a305db162285f5c65e1468ca563480b900587dac` on 2026-11-01: local
+  `main` was 0 behind / 26 ahead of `origin/main`
+  (`5872be3a1a7a0ab6754ea4fea472d53beea3d39a`). This docs branch and
+  subsequent local merges stay unpushed until the final push.
+  Suites then: backend unit 156 passed, backend integration 270
+  passed, frontend 14 passed - see `docs/acceptance-log.md`.
 - P0 closeout: local `fix/reliability` at `652ffd7` (10 commits
   `bc1a1c3..652ffd7`, ahead of `origin/fix/reliability`), carried onto the
   reviewable branch `fix/p0-closeout` plus two regression pins in
@@ -39,10 +44,11 @@ and handover. UI is P4 and intake security is P3, never P2.
    fallback. **P6**: controlled failure demonstration. **P7**:
    connected verification and handover.
 
-Still missing after P1a: P1b persistent worker/Compose and all of
-P2-P7. Local P1a evidence: 55 unit + 143 integration green (includes 13 real-HTTP tests plus trickle-deadline unit tests); simulator
-create counts prove one write/attempt. No real CRM is called; no
-acceptance item is signed off in code (operator-kept record).
+Historical P1a note (2026-10-26): P1b-P7 were still missing then.
+As of 2026-11-01 all of P1b, P2, P3, P4, P5 and P6 are implemented
+on local `main`; P7 connected mode is implemented but UNVERIFIED
+pending M0. No real CRM is called; no acceptance item is signed
+off in code (operator-kept record).
 
 ## P1b-2 verification (2026-10-26, local only, not CI)
 
