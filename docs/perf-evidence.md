@@ -42,3 +42,16 @@ Plan targets for comparison: intake p95 500 ms, time-to-ready p95
 10 s. The observed local sample is within both targets. Re-run the
 script against a production-like environment before treating the
 targets as demonstrated there.
+
+## Sampler report format
+
+The sampler prints every `verification.yaml` performance report field:
+`CPU` (model and logical count), `RAM` (total, stdlib-only), `OS`,
+`commit`, `profile` (default `mock`, from `--profile` or
+`PERF_PROFILE`), `N`, `errors`, and `p50`/`p95`/`max` for both series
+(p95 nearest-rank). Failed measured samples are counted in `errors`
+and the full report is still printed. The exit code is 0 only when
+both p95 targets are met and `errors` is 0; it is 2 when either p95
+target is missed or `errors` > 0. The verbatim sample above predates
+the `profile`/`N`/`errors` lines and is left unchanged; no new
+measurements are recorded here.
