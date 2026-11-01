@@ -59,7 +59,7 @@ Attention = Literal[
     "retry_scheduled",
     "notification_uncertain",
     "integration_blocked",
-    "intervention_required",
+    "needs_intervention",
 ]
 CrmStatus = Literal[
     "pending",

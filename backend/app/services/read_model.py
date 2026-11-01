@@ -52,7 +52,7 @@ _SYNC_STATE_MAP: dict[str | None, tuple[str, str, str]] = {
     "waiting_retry": ("waiting_retry", "retry_scheduled", "waiting_retry"),
     "reconciling": ("reconciling", "none", "reconciling"),
     "blocked": ("blocked", "integration_blocked", "blocked"),
-    "dead": ("failed", "intervention_required", "failed"),
+    "dead": ("failed", "needs_intervention", "failed"),
 }
 
 
@@ -92,7 +92,7 @@ def map_detail_status(
 
     # A pending review overrides only a base attention of "none":
     # it is never hidden by ready or processing, and never masks
-    # integration_blocked, intervention_required or
+    # integration_blocked, needs_intervention or
     # retry_scheduled.
     if requires_review and attention == "none":
         attention = "review_required"
@@ -109,7 +109,7 @@ def map_detail_status(
     # crm fields still come from the sync row (or pending/null).
     if prepare_dead:
         summary = "failed"
-        attention = "intervention_required"
+        attention = "needs_intervention"
 
     return DetailStatus(
         processing_summary=summary,

@@ -38,7 +38,7 @@ export default function EnquiriesPage() {
           <option value="review_required">Review required</option>
           <option value="retry_scheduled">Retry scheduled</option>
           <option value="integration_blocked">Integration blocked</option>
-          <option value="intervention_required">Intervention required</option>
+          <option value="needs_intervention">Needs intervention</option>
         </select>
         <button type="submit">Search</button>
       </form>
