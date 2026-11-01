@@ -1,8 +1,9 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { parseApiError } from "../src/lib/api";
 import { shouldPoll, usePolling } from "../src/lib/polling";
+import EnquiriesPage from "../src/pages/EnquiriesPage";
 import TasksPage from "../src/pages/TasksPage";
 import IntegrationsPage from "../src/pages/IntegrationsPage";
 import EnquiryDetailPage from "../src/pages/EnquiryDetailPage";
@@ -235,6 +236,31 @@ const taskItem = {
   },
 };
 
+describe("scoped enquiry and task rows (PW01/PW02)", () => {
+  it("exposes enquiry-row-{id} on the enquiries list row", async () => {
+    const item = {
+      id: "e1", display_no: "ENQ-000001", received_at: "2026-01-01T00:00:00Z",
+      service_type: "bathroom", processing_summary: "ready", attention: "none",
+      crm_status: "synced", next_attempt_at: null, owner: null,
+      contact: { id: "c1", email: "a@b.co", first_name: "Ada", last_name: null, phone_e164: null, version: 1 },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ items: [item], next_cursor: null }), { status: 200 })));
+    render(<EnquiriesPage />);
+    const row = await screen.findByTestId("enquiry-row-e1");
+    expect(within(row).getByRole("link", { name: "ENQ-000001" })).toBeInTheDocument();
+    expect(row).toHaveTextContent("ready");
+  });
+
+  it("scopes the task row by enquiry id with the PW02 complete button name", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ items: [taskItem], next_cursor: null }), { status: 200 })));
+    render(<TasksPage />);
+    const row = await screen.findByTestId("task-row-e1");
+    expect(within(row).getByRole("button", { name: "Complete follow-up for ENQ-000001" })).toBeInTheDocument();
+  });
+});
+
 describe("task reason length (min 10)", () => {
   it("cannot submit a short reason and shows the 422 field error by the field", async () => {
     let posts = 0;
@@ -247,7 +273,7 @@ describe("task reason length (min 10)", () => {
     }));
     render(<TasksPage />);
     const input = await screen.findByLabelText(/reason/i);
-    const complete = screen.getByRole("button", { name: /complete task/i });
+    const complete = screen.getByRole("button", { name: "Complete follow-up for ENQ-000001" });
     fireEvent.change(input, { target: { value: "short" } });
     expect(input).toHaveAttribute("minLength", "10");
     expect(complete).toBeDisabled();
