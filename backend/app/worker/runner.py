@@ -432,7 +432,7 @@ def _extraction_profile(settings: Settings) -> extraction_service.ExtractionProf
         mode=settings.extractor_mode, provider=provider,
         model=settings.extractor_model,
         prompt_version=settings.extractor_prompt_version,
-        parameters={},
+        parameters={"extractor_mode": settings.extractor_mode, "provider": provider},
     )
 
 

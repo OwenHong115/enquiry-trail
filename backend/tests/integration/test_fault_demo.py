@@ -211,6 +211,8 @@ def test_crash_after_remote_write_recovers_by_readback(api_client, postgres_db, 
         tasks = conn.execute(text("SELECT count(*) FROM leadops.follow_up_tasks WHERE enquiry_id=:e"), {"e": enquiry_id}).scalar_one()
     assert links == 1
     assert tasks == 1
+    counts_after = httpx.get(f"{sim}/__test__/counts").json()["counts"]
+    assert counts_after["create"] == 1
     engine.dispose()
 
 

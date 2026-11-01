@@ -153,3 +153,22 @@ def test_default_profile_is_fixture() -> None:
     settings = Settings(database_url=DB, session_secret="s")
     assert settings.extractor_mode == "fixture"
     assert settings.extractor_prompt_version
+
+
+def test_fixture_differs_from_template() -> None:
+    fixture = FixtureExtractor().extract(_req())
+    template = TemplateExtractor().extract(_req())
+    assert fixture != template
+    assert fixture.timeframe is not None and fixture.timeframe.endswith("(fixture)")
+    assert fixture.evidence == template.evidence
+    cleaned = validate_extraction(fixture, MSG)
+    assert cleaned["timeframe"] == fixture.timeframe
+    assert cleaned["budget"] == 20000
+
+
+def test_runner_profile_snapshot_records_parameters() -> None:
+    from app.settings import Settings as _Settings
+    from app.worker.runner import _extraction_profile
+    profile = _extraction_profile(_Settings(database_url=DB, session_secret="s", extractor_mode="fixture"))
+    assert profile.parameters == {"extractor_mode": "fixture", "provider": "fixture"}
+    assert profile.parameters != {}

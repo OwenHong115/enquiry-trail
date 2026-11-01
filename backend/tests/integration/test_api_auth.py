@@ -238,3 +238,35 @@ def test_error_responses_carry_request_id_without_traceback(
         assert "traceback" not in response.text.lower().replace(
             "traceback (most recent call last)", ""
         ) or "Traceback" not in response.text
+
+
+def test_business_clock_travel_does_not_extend_session_past_db_expiry(postgres_db, seeded_api_operator):
+    """A27: session expiry is governed by the database clock only.
+
+    Advancing a business (FakeClock) clock far into the future must not
+    change the stored DB-clock expiry, and once the DB clock passes that
+    expiry the session no longer resolves even though business time is
+    held before it.
+    """
+    from datetime import datetime, timedelta, timezone
+    from app.security import sessions as session_service
+    from support.fake_clock import FakeClock
+    engine = create_engine(postgres_db)
+    factory = sessionmaker(bind=engine)
+    session = factory()
+    try:
+        issued = session_service.issue_session(session, seeded_api_operator, "test-session-secret")
+        expires_before = issued.expires_at
+        business = FakeClock(datetime.now(timezone.utc))
+        business.advance_by(365 * 24 * 3600)  # business time travels a year
+        resolved = session_service.resolve_session(session, issued.token, "test-session-secret")
+        assert resolved is not None
+        assert resolved.expires_at == expires_before
+        # Move only the database clock past expiry; business clock stays put.
+        session.execute(text("UPDATE leadops.sessions SET expires_at = clock_timestamp() - interval '1 minute'"))
+        session.commit()
+        assert business.now_utc() > expires_before  # business travel alone did not kill it above
+        assert session_service.resolve_session(session, issued.token, "test-session-secret") is None
+    finally:
+        session.close()
+        engine.dispose()
