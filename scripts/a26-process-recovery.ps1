@@ -56,6 +56,17 @@
 #                       is only a template; a run replaces it with the
 #                       timestamp, commit, steps, counts and verdict
 #                       observed in that run.
+# In-flight window: before the target enquiry is created or reused,
+# the script holds ACCESS EXCLUSIVE on leadops.crm_links (only that
+# table; never leadops.jobs or leadops.enquiries) from a background
+# lock-holder psql session bounded by pg_sleep(180). A claimed
+# prepare/sync job then stays in state 'running' while the worker
+# blocks on its mid-sync crm_links read/insert, so the claim barrier
+# below reliably observes the claim before the kill. The holder is
+# stopped right after the worker kill, and again from a finally path
+# on any failure after acquisition; the bounded sleep auto-releases
+# the lock if the holder process lingers.
+#
 # The script is safe to re-run: it only kills/restarts the worker
 # service and reads counts. It never truncates or rewrites data; the
 # only data change is expiring the target enquiry's orphaned lease so
@@ -64,6 +75,7 @@ param(
     [string]$EnquiryId = $env:A26_ENQUIRY_ID,
     [string]$RecordPath = "docs/a26-compose-recovery-evidence.md",
     [int]$ClaimTimeoutSeconds = 120,
+    [int]$LockTimeoutSeconds = 30,
     [int]$DrainTimeoutSeconds = 120,
     [string]$ApiBaseUrl = "http://127.0.0.1:8080",
     [string]$WebOrigin = $(if ($env:A26_WEB_ORIGIN) { $env:A26_WEB_ORIGIN } else { "http://127.0.0.1:5173" })
@@ -77,6 +89,9 @@ $script:counts = [ordered]@{}
 $script:enquiryId = $null
 $script:contactId = $null
 $script:claimedJob = $null
+$script:lockHolder = $null
+$script:lockHeld = $false
+$script:lockHoldSeconds = 180
 $script:repoRoot = Split-Path -Parent $PSScriptRoot
 
 function Add-Step([string]$Message) {
@@ -138,6 +153,74 @@ function Invoke-PsqlScalar([string]$Sql) {
     } finally {
         $env:PGPASSWORD = $previousPassword
     }
+}
+
+function Get-CrmLockHolderArgumentString {
+    # Argument string for Start-Process (docker compose). The SQL is
+    # double-quoted as a single -c value; user/database come from the
+    # parsed DATABASE_URL and must not contain characters that would
+    # break that quoting. The password never appears here: it travels
+    # via the PGPASSWORD environment variable (see Start-CrmLinksLock).
+    foreach ($part in @($script:dbParts.User, $script:dbParts.Database)) {
+        if ($part -match '[\s"]') { throw "DATABASE_URL user/database contains whitespace or a quote; cannot build the lock-holder command safely" }
+    }
+    $sql = "BEGIN; LOCK TABLE leadops.crm_links IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep($($script:lockHoldSeconds)); COMMIT;"
+    return "compose exec -T -e PGPASSWORD db psql -U $($script:dbParts.User) -d $($script:dbParts.Database) -v ON_ERROR_STOP=1 -c `"$sql`""
+}
+
+function Stop-CrmLinksLock {
+    # Idempotent: safe from the post-kill step and the finally path.
+    if ($null -eq $script:lockHolder) { return }
+    $holder = $script:lockHolder
+    $script:lockHolder = $null
+    $wasHeld = $script:lockHeld
+    $script:lockHeld = $false
+    try {
+        $holder.Refresh()
+        if ($holder.HasExited) {
+            Add-Step "crm_links lock released: lock-holder process $($holder.Id) already exited (bounded pg_sleep($($script:lockHoldSeconds)) session ended); wasHeld=$wasHeld"
+            return
+        }
+        Stop-Process -Id $holder.Id -Force -ErrorAction Stop
+        try { $holder.WaitForExit(5000) | Out-Null } catch { }
+        Add-Step "crm_links lock released: lock-holder process $($holder.Id) stopped; bounded pg_sleep($($script:lockHoldSeconds)) auto-release remains as backstop if the session lingers"
+    } catch {
+        Add-Step "crm_links lock released: stopping lock-holder process $($holder.Id) failed ($($_.Exception.Message)); bounded pg_sleep($($script:lockHoldSeconds)) will auto-release the lock"
+    }
+}
+
+function Start-CrmLinksLock {
+    # Start the bounded lock-holder and prove the lock is held before
+    # any enquiry is created or reused. Only leadops.crm_links is
+    # locked; leadops.jobs and leadops.enquiries are never locked.
+    Add-Step "crm_links lock requested: starting background lock-holder (docker compose exec db psql, ACCESS EXCLUSIVE on leadops.crm_links, pg_sleep($($script:lockHoldSeconds)))..."
+    $argumentString = Get-CrmLockHolderArgumentString
+    $previousPassword = $env:PGPASSWORD
+    $env:PGPASSWORD = $script:dbParts.Password
+    try {
+        $script:lockHolder = Start-Process -FilePath "docker" -ArgumentList $argumentString -WorkingDirectory $script:repoRoot -WindowStyle Hidden -PassThru
+    } finally {
+        $env:PGPASSWORD = $previousPassword
+    }
+    if ($null -eq $script:lockHolder) { throw "crm_links lock not acquired: lock-holder process did not start; worker was NOT killed" }
+    Add-Step "crm_links lock-holder started: process id=$($script:lockHolder.Id); verifying lock in pg_locks (timeout ${LockTimeoutSeconds}s)..."
+    $lockDeadline = (Get-Date).AddSeconds($LockTimeoutSeconds)
+    do {
+        $script:lockHolder.Refresh()
+        if ($script:lockHolder.HasExited) {
+            throw "crm_links lock not acquired: lock-holder process $($script:lockHolder.Id) exited (code $($script:lockHolder.ExitCode)) before the lock was verified; worker was NOT killed"
+        }
+        $granted = Invoke-PsqlScalar "SELECT count(*) FROM pg_locks WHERE relation = 'leadops.crm_links'::regclass AND mode = 'AccessExclusiveLock' AND granted"
+        if ($granted -eq "1" -or $granted -eq "t") { $script:lockHeld = $true; break }
+        # pg_locks may show more than one row only if another holder
+        # exists; any granted AccessExclusive row proves the table lock.
+        if ($granted -match '^\d+$' -and [int]$granted -ge 1) { $script:lockHeld = $true; break }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $lockDeadline)
+    if (-not $script:lockHeld) {
+        throw "crm_links lock not acquired within ${LockTimeoutSeconds}s (pg_locks showed no granted AccessExclusiveLock on leadops.crm_links); worker was NOT killed; crm_links lock was released"
+    }
+    Add-Step "crm_links lock held: granted AccessExclusiveLock on leadops.crm_links verified via pg_locks (lock-holder process id=$($script:lockHolder.Id), bounded pg_sleep($($script:lockHoldSeconds)))"
 }
 
 function Assert-Guid([string]$Value, [string]$What) {
@@ -230,6 +313,11 @@ try {
     $script:dbParts = Get-DbParts $databaseUrl
     Add-Step "database connection taken from DATABASE_URL (environment or .env); user=$($script:dbParts.User) database=$($script:dbParts.Database)"
 
+    # Real in-flight window: hold crm_links BEFORE creating/reusing
+    # the target enquiry, so a claimed job stays 'running' while the
+    # worker blocks on crm_links instead of finishing in ~140ms.
+    Start-CrmLinksLock
+
     # Resolve or create the enquiry in scope before touching the worker.
     if ($EnquiryId) {
         $script:enquiryId = Assert-Guid $EnquiryId "enquiry id"
@@ -267,7 +355,7 @@ try {
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $claimDeadline)
     if (-not $script:claimedJob) {
-        throw "claim barrier failed: no prepare/sync job for enquiry $($script:enquiryId) was claimed (state='running' with lease set) within ${ClaimTimeoutSeconds}s; worker was NOT killed"
+        throw "claim barrier failed: no prepare/sync job for enquiry $($script:enquiryId) was claimed (state='running' with lease set) within ${ClaimTimeoutSeconds}s; worker was NOT killed; crm_links lock was released"
     }
     $script:counts["claimed_job_before_kill"] = $script:claimedJob
     Add-Step "claim barrier passed: claimed job (id|kind) = $($script:claimedJob)"
@@ -275,6 +363,8 @@ try {
     Add-Step "killing worker service (docker compose kill worker)..."
     docker compose kill worker
     if ($LASTEXITCODE -ne 0) { throw "docker compose kill worker failed" }
+    Add-Step "worker killed; stopping crm_links lock-holder before lease expiry and restart..."
+    Stop-CrmLinksLock
     $workerState = (docker compose ps worker --format "{{.State}}")
     $script:counts["worker_state_after_kill"] = $workerState
     Add-Step "worker state after kill = $workerState"
@@ -322,6 +412,8 @@ try {
 } catch {
     $script:failures += $_.Exception.Message
     Add-Step "error: $($_.Exception.Message)"
+} finally {
+    Stop-CrmLinksLock
 }
 
 $verdict = if ($script:failures.Count -gt 0) { "FAIL" } else { "PASS" }
