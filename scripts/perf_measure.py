@@ -10,10 +10,15 @@ Protocol (plan field shape):
   For each intake: intake latency (POST /api/v1/intake/form) and
   time-to-ready (intake start until the enquiry detail first reports
   processing_summary == "ready", polled every 200 ms, 120 s cap).
-Prints CPU/RAM/OS/commit plus p50/p95/max for both series. These are
-evidence samples from the machine that ran them, not a production
-guarantee. Exit code is 0 when every measured intake succeeded; the
-observed percentiles are printed verbatim for docs/perf-evidence.md.
+
+Report fields (verification.yaml performance report_fields): CPU, RAM,
+OS, commit, profile, N, errors, p50, p95, max. CPU includes model and
+logical count; RAM is total physical memory via a stdlib-only method.
+p95 uses the nearest-rank method. These are evidence samples from the
+machine that ran them, not a production guarantee. Exit code is 0 when
+both p95 targets are met and there were no measured errors, and 2 when
+either p95 target is missed or errors > 0; failed samples are counted
+in `errors` and never dropped from the report.
 
 Environment:
   PERF_BASE_URL   default http://127.0.0.1:8080
@@ -21,12 +26,20 @@ Environment:
                   web origin when the API only allows that exact origin.
   PERF_USERNAME / PERF_PASSWORD (or E2E_USERNAME / E2E_PASSWORD)
   PERF_WARMUP=10  PERF_N=100  PERF_CONCURRENCY=5  PERF_COMMIT (optional)
+  PERF_PROFILE    profile name reported in the report (default: mock)
+
+CLI (backwards compatible; all flags optional, env vars still work):
+  --profile       profile name (overrides PERF_PROFILE)
+  --warmup / --n / --concurrency   override PERF_WARMUP / PERF_N /
+                  PERF_CONCURRENCY
 """
 
 from __future__ import annotations
 
+import argparse
 import concurrent.futures
 import json
+import math
 import os
 import platform
 import statistics
@@ -40,6 +53,9 @@ BASE = os.environ.get("PERF_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
 WARMUP = int(os.environ.get("PERF_WARMUP", "10"))
 N = int(os.environ.get("PERF_N", "100"))
 CONCURRENCY = int(os.environ.get("PERF_CONCURRENCY", "5"))
+PROFILE = os.environ.get("PERF_PROFILE", "mock")
+INTAKE_P95_TARGET_MS = 500.0
+READY_P95_TARGET_MS = 10000.0
 
 
 def _request(method, path, body=None, headers=None, cookie=None):
@@ -97,11 +113,30 @@ def _one(cookie, csrf, index):
     return intake_s * 1000, ready_s * 1000
 
 
-def _stats(values):
+def _percentile_nearest_rank(values, p):
     ordered = sorted(values)
-    def pct(p):
-        return ordered[min(len(ordered) - 1, max(0, int(round(p / 100 * len(ordered) + 0.5)) - 1))]
-    return statistics.median(values), pct(95), max(values)
+    if not ordered:
+        return None
+    rank = math.ceil(p / 100 * len(ordered))
+    index = min(len(ordered) - 1, max(0, rank - 1))
+    return ordered[index]
+
+
+def _stats(values):
+    if not values:
+        return None, None, None
+    return statistics.median(values), _percentile_nearest_rank(values, 95), max(values)
+
+
+def _evaluate(intake_p95, ready_p95, errors):
+    """Return 0 only when both p95 targets are met and errors == 0, else 2."""
+    if errors:
+        return 2
+    if intake_p95 is None or ready_p95 is None:
+        return 2
+    if intake_p95 > INTAKE_P95_TARGET_MS or ready_p95 > READY_P95_TARGET_MS:
+        return 2
+    return 0
 
 
 def _commit():
@@ -113,35 +148,74 @@ def _commit():
         return "unknown"
 
 
-def _host_info():
-    cpu = platform.processor() or platform.machine()
-    ram = "unknown"
-    try:
-        import ctypes
-        class _Mem(ctypes.Structure):
-            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-        mem = _Mem(); mem.dwLength = ctypes.sizeof(_Mem)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
-            ram = f"{mem.ullTotalPhys / 2**30:.1f} GiB"
-    except Exception:
+def _cpu_model():
+    if platform.system() == "Linux":
         try:
-            pages, size = os.sysconf("SC_PHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
-            ram = f"{pages * size / 2**30:.1f} GiB"
+            with open("/proc/cpuinfo", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    if line.lower().startswith("model name") and ":" in line:
+                        model = line.split(":", 1)[1].strip()
+                        if model:
+                            return model
         except Exception:
             pass
-    return cpu, ram, f"{platform.system()} {platform.release()} ({platform.version()})"
+    return platform.processor() or platform.machine() or "unknown"
 
 
-def main():
+def _ram_total():
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+
+            class _Mem(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            mem = _Mem()
+            mem.dwLength = ctypes.sizeof(_Mem)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):  # type: ignore[attr-defined]
+                return f"{mem.ullTotalPhys / 2**30:.1f} GiB"
+        except Exception:
+            pass
+        return "unknown"
+    try:
+        pages, size = os.sysconf("SC_PHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
+        return f"{pages * size / 2**30:.1f} GiB"
+    except Exception:
+        return "unknown"
+
+
+def _host_info():
+    model = _cpu_model()
+    count = os.cpu_count()
+    cpu = f"{model} ({count} logical CPUs)" if count else model
+    return cpu, _ram_total(), f"{platform.system()} {platform.release()} ({platform.version()})"
+
+
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Performance evidence sampler (stdlib only).")
+    parser.add_argument("--profile", default=None, help="profile name (default: PERF_PROFILE or mock)")
+    parser.add_argument("--warmup", type=int, default=None, help="warmup count (default: PERF_WARMUP or 10)")
+    parser.add_argument("--n", type=int, default=None, help="measured count (default: PERF_N or 100)")
+    parser.add_argument("--concurrency", type=int, default=None, help="concurrency (default: PERF_CONCURRENCY or 5)")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = _parse_args(argv)
+    profile = args.profile if args.profile is not None else PROFILE
+    warmup = args.warmup if args.warmup is not None else WARMUP
+    n = args.n if args.n is not None else N
+    concurrency = args.concurrency if args.concurrency is not None else CONCURRENCY
     cookie, csrf = _login()
     counter = [0]
+
     def run_batch(count):
         results, errors = [], []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = []
             for _ in range(count):
                 counter[0] += 1
@@ -153,24 +227,32 @@ def main():
                     errors.append(str(err))
         return results, errors
 
-    warm, warm_errors = run_batch(WARMUP)
+    warm, warm_errors = run_batch(warmup)
     print(f"warmup: {len(warm)} ok, {len(warm_errors)} failed")
-    results, errors = run_batch(N)
-    print(f"measured: {len(results)} ok, {len(errors)} failed of N={N} at concurrency={CONCURRENCY}")
+    results, errors = run_batch(n)
+    print(f"measured: {len(results)} ok, {len(errors)} failed of N={n} at concurrency={concurrency}")
     if errors:
         print(f"first error: {errors[0]}")
-        return 1
-    intake = [r[0] for r in results]; ready = [r[1] for r in results]
+    intake = [r[0] for r in results]
+    ready = [r[1] for r in results]
+    intake_p50, intake_p95, intake_max = _stats(intake)
+    ready_p50, ready_p95, ready_max = _stats(ready)
     cpu, ram, os_name = _host_info()
     print(f"CPU: {cpu}")
     print(f"RAM: {ram}")
     print(f"OS: {os_name}")
     print(f"commit: {_commit()}")
-    for label, series in (("intake_ms", intake), ("time_to_ready_ms", ready)):
-        p50, p95, mx = _stats(series)
-        print(f"{label}: p50={p50:.1f} p95={p95:.1f} max={mx:.1f}")
+    print(f"profile: {profile}")
+    print(f"N: {n}")
+    print(f"errors: {len(errors)}")
+
+    def fmt(value):
+        return f"{value:.1f}" if value is not None else "n/a"
+
+    print(f"intake_ms: p50={fmt(intake_p50)} p95={fmt(intake_p95)} max={fmt(intake_max)}")
+    print(f"time_to_ready_ms: p50={fmt(ready_p50)} p95={fmt(ready_p95)} max={fmt(ready_max)}")
     print("targets: intake p95 <= 500ms, time-to-ready p95 <= 10000ms (plan targets; local sample only)")
-    return 0
+    return _evaluate(intake_p95, ready_p95, len(errors))
 
 
 if __name__ == "__main__":
