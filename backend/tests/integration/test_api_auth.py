@@ -248,7 +248,7 @@ def test_business_clock_travel_does_not_extend_session_past_db_expiry(postgres_d
     expiry the session no longer resolves even though business time is
     held before it.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
     from app.security import sessions as session_service
     from support.fake_clock import FakeClock
     engine = create_engine(postgres_db)
