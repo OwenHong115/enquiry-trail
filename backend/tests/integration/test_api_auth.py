@@ -240,33 +240,116 @@ def test_error_responses_carry_request_id_without_traceback(
         ) or "Traceback" not in response.text
 
 
-def test_business_clock_travel_does_not_extend_session_past_db_expiry(postgres_db, seeded_api_operator):
-    """A27: session expiry is governed by the database clock only.
+def test_business_clock_travel_does_not_extend_session_past_db_expiry(
+    postgres_db, seeded_api_operator, db_session
+):
+    """A27: the two clocks govern different fields and never swap.
 
-    Advancing a business (FakeClock) clock far into the future must not
-    change the stored DB-clock expiry, and once the DB clock passes that
-    expiry the session no longer resolves even though business time is
-    held before it.
+    Session expiry is governed by the database clock only
+    (app/security/sessions.py compares expires_at against
+    clock_timestamp()); intake business timestamps are governed by
+    the BusinessClock (app/services/intake.py stamps received_at
+    from clock.now_utc()).
+
+    Driving intake with a FakeClock travelled one year ahead must
+    stamp the travelled instant on the receipt, enquiry, initial
+    job and follow-up task, while the already-issued session keeps
+    its DB-clock expiry and still resolves. Only moving the
+    database clock past that expiry stops resolution.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
+
     from app.security import sessions as session_service
+    from app.services import intake
     from support.fake_clock import FakeClock
+    from support.routing_config import ROUTING_CONFIG
+
     engine = create_engine(postgres_db)
     factory = sessionmaker(bind=engine)
     session = factory()
     try:
-        issued = session_service.issue_session(session, seeded_api_operator, "test-session-secret")
+        issued = session_service.issue_session(
+            session, seeded_api_operator, "test-session-secret"
+        )
         expires_before = issued.expires_at
+
+        # Travel business time one year ahead and drive a real
+        # BusinessClock consumer (intake) with the travelled clock.
         business = FakeClock(datetime.now(timezone.utc))
-        business.advance_by(365 * 24 * 3600)  # business time travels a year
-        resolved = session_service.resolve_session(session, issued.token, "test-session-secret")
+        business.advance_by(365 * 24 * 3600)
+        travelled = business.now_utc()
+        assert travelled > expires_before
+        intake.submit_intake(
+            db_session,
+            {
+                "first_name": "Alex",
+                "last_name": "Morgan",
+                "email": "alex.demo@example.com",
+                "phone": "+61412345678",
+                "postcode": "2150",
+                "service_type": "bathroom",
+                "message": "I need a bathroom renovation next month.",
+                "preferred_contact": "email",
+                "acknowledge_demo": True,
+            },
+            source="web",
+            event_key=uuid.uuid4(),
+            clock=business,
+            routing_config=ROUTING_CONFIG,
+        )
+
+        # Read back with raw SQL, never through the service under test.
+        read_engine = create_engine(postgres_db)
+        try:
+            with read_engine.connect() as conn:
+                receipt_at = conn.execute(
+                    text("SELECT received_at FROM leadops.ingestion_receipts")
+                ).scalar_one()
+                enquiry_at = conn.execute(
+                    text("SELECT received_at FROM leadops.enquiries")
+                ).scalar_one()
+                job_at = conn.execute(
+                    text(
+                        "SELECT next_attempt_at FROM leadops.jobs "
+                        "WHERE kind = 'prepare_enquiry'"
+                    )
+                ).scalar_one()
+                task_due_at = conn.execute(
+                    text("SELECT due_at FROM leadops.follow_up_tasks")
+                ).scalar_one()
+        finally:
+            read_engine.dispose()
+
+        # Business timestamps follow the travelled BusinessClock.
+        assert receipt_at == travelled
+        assert enquiry_at == travelled
+        assert job_at == travelled
+        assert task_due_at == travelled + timedelta(days=1)
+
+        # The session is untouched by business travel: same DB-clock
+        # expiry, and it still resolves even though business time is
+        # now a year past that expiry.
+        resolved = session_service.resolve_session(
+            session, issued.token, "test-session-secret"
+        )
         assert resolved is not None
         assert resolved.expires_at == expires_before
-        # Move only the database clock past expiry; business clock stays put.
-        session.execute(text("UPDATE leadops.sessions SET expires_at = clock_timestamp() - interval '1 minute'"))
+
+        # Move only the database clock past expiry; business clock
+        # stays put, yet the session no longer resolves.
+        session.execute(
+            text(
+                "UPDATE leadops.sessions SET expires_at = "
+                "clock_timestamp() - interval '1 minute'"
+            )
+        )
         session.commit()
-        assert business.now_utc() > expires_before  # business travel alone did not kill it above
-        assert session_service.resolve_session(session, issued.token, "test-session-secret") is None
+        assert (
+            session_service.resolve_session(
+                session, issued.token, "test-session-secret"
+            )
+            is None
+        )
     finally:
         session.close()
         engine.dispose()
