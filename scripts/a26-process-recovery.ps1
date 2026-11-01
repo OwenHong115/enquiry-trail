@@ -99,6 +99,24 @@ function Add-Step([string]$Message) {
     Write-Host $Message
 }
 
+$script:lastComposeOutput = @()
+
+function Invoke-Compose([string[]]$ComposeArgs) {
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = docker compose @ComposeArgs 2>&1
+        $exitCode = $LASTEXITCODE
+        $script:lastComposeOutput = @($output | ForEach-Object { "$_" })
+        foreach ($line in $script:lastComposeOutput) {
+            if ($line) { Add-Step "docker compose $($ComposeArgs -join ' '): $line" }
+        }
+        return $exitCode
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
 function Get-ConfigValue([string]$Name) {
     $fromEnv = [Environment]::GetEnvironmentVariable($Name)
     if ($fromEnv) { return $fromEnv.Trim() }
@@ -361,11 +379,11 @@ try {
     Add-Step "claim barrier passed: claimed job (id|kind) = $($script:claimedJob)"
 
     Add-Step "killing worker service (docker compose kill worker)..."
-    docker compose kill worker
-    if ($LASTEXITCODE -ne 0) { throw "docker compose kill worker failed" }
+    if ((Invoke-Compose @("kill", "worker")) -ne 0) { throw "docker compose kill worker failed" }
     Add-Step "worker killed; stopping crm_links lock-holder before lease expiry and restart..."
     Stop-CrmLinksLock
-    $workerState = (docker compose ps worker --format "{{.State}}")
+    Invoke-Compose @("ps", "worker", "--format", "{{.State}}") | Out-Null
+    $workerState = ($script:lastComposeOutput | Out-String).Trim()
     $script:counts["worker_state_after_kill"] = $workerState
     Add-Step "worker state after kill = $workerState"
 
@@ -378,8 +396,7 @@ try {
     Add-Step "target enquiry leases expired = $expiredCount"
 
     Add-Step "restarting worker service..."
-    docker compose up -d worker
-    if ($LASTEXITCODE -ne 0) { throw "docker compose up -d worker failed" }
+    if ((Invoke-Compose @("up", "-d", "worker")) -ne 0) { throw "docker compose up -d worker failed" }
 
     $drainDeadline = (Get-Date).AddSeconds($DrainTimeoutSeconds)
     do {
