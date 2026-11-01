@@ -219,3 +219,18 @@ def test_worker_template_mode_prepare(postgres_db):
     rows = _fetch(postgres_db, "SELECT status, result_json FROM leadops.enrichments WHERE enquiry_id=:e", {"e": enquiry_id})
     assert rows[0].status == "template_fallback"
     assert rows[0].result_json["budget"] == 20000
+
+def test_fixture_mode_persists_own_strategy_snapshot(postgres_db):
+    # Fixture mode must persist a non-empty parameters_snapshot naming
+    # its own strategy and applied rules, distinct from template mode.
+    from app.adapters.extraction_fixture import FixtureExtractor
+    enquiry_id = _submit(postgres_db, email="fixture-mode@example.com")
+    _prepare(postgres_db, FixtureExtractor())
+    rows = _fetch(postgres_db, "SELECT status, result_json, parameters_snapshot FROM leadops.enrichments WHERE enquiry_id=:e", {"e": enquiry_id})
+    assert rows[0].status == "fixture"
+    assert rows[0].result_json == {"budget": 20000, "timeframe": "next month", "evidence": "My budget is around AUD 20,000."}
+    snapshot = rows[0].parameters_snapshot
+    assert snapshot["parameters"]["strategy"] == "fixture-rules"
+    assert snapshot["parameters"]["rules"]
+    assert snapshot["parameters"] != {"temperature": 0}
+

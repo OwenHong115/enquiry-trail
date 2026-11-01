@@ -116,6 +116,9 @@ def extract_and_persist(
         if not isinstance(raw, ExtractionResult):
             raise ExtractionError("invalid_response")
         cleaned = validate_extraction(raw, message)
+        describe = getattr(extractor, "describe_parameters", None)
+        if callable(describe):
+            snapshot["parameters"] = {**snapshot["parameters"], **describe()}
     except ExtractionError as err:
         last_error_code = err.code
         status = "template_fallback"
