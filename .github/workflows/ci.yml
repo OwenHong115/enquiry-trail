@@ -60,3 +60,127 @@ jobs:
       - name: Run integration tests
         working-directory: backend
         run: uv run pytest tests/integration -q
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies from uv.lock
+        working-directory: backend
+        run: uv sync --locked --python 3.12
+
+      - name: Run Ruff over the backend
+        working-directory: backend
+        run: uv run ruff check app tests
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run ESLint over the frontend
+        working-directory: frontend
+        run: npm run lint
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm run test
+
+      - name: Build the frontend
+        working-directory: frontend
+        run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+
+    env:
+      # CI-only throwaway values; never reuse these outside CI.
+      SESSION_SECRET: ci-only-session-secret
+      SEED_OPERATOR_PASSWORD: ci-only-operator-password
+      E2E_USERNAME: demo-operator
+      E2E_PASSWORD: ci-only-operator-password
+      E2E_BASE_URL: http://127.0.0.1:5173
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Start the compose stack
+        run: docker compose up -d --build
+
+      - name: Wait for the API and web UI to become healthy
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/api/v1/health/live >/dev/null && curl -fsS http://127.0.0.1:5173/ >/dev/null; then
+              echo "Stack is healthy."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Stack did not become healthy in time."
+          docker compose ps
+          docker compose logs
+          exit 1
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install the Playwright browser
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Playwright suite
+        working-directory: e2e
+        run: npm run test
+
+      - name: Show compose logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop the compose stack
+        if: always()
+        run: docker compose down -v
