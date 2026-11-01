@@ -43,4 +43,4 @@ session's writable roots. The original branch and remote PR were not modified.
 2. Review the final diff; merge to main. Do not mix the CRM adapter
    into this PR.
 
-No remote CI result, production readiness, or manual acceptance signoff is claimed until CI reports on the pushed PR revision. Local merge gate: complete (see above). Remaining gate: green CI on the PR revision, then merge.
+No remote CI result, production readiness, or manual acceptance signoff is claimed until CI reports on the pushed PR revision. Local merge gate: complete (see above). Remaining gate: green CI on the PR revision, then merge. Update 2026-11-01: this 2026-10-26 review is historical. The current gate is H03 in `docs/checklist.md` (OPEN until the operator observes a GitHub CI run for the exact head; `.github/workflows/ci.yml` now has test/lint/frontend/e2e jobs). Local suites at HEAD `a305db1`: unit 156, integration 270, frontend 14 - see `docs/acceptance-log.md`.

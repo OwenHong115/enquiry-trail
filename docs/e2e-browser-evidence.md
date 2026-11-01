@@ -9,7 +9,7 @@ off any acceptance item; acceptance remains the operator's record.
 
 - Branch: `feat/e2e-browser-verification`
 - Worktree: `.worktrees/wt7`
-- Base: `cecf734` (current `main`, all six worktrees merged)
+- Base at recording time: `cecf734`. Current HEAD at docs re-verification (2026-11-01, not a re-run): `a305db162285f5c65e1468ca563480b900587dac`
 - Test commit: `1b3d3df` (`test(e2e): add signed-in browser verification against the real stack`)
 
 ## Changed files
@@ -118,7 +118,7 @@ Flow covered through labelled UI controls only:
 
 - `npm --prefix frontend run test`: 2 test files passed, 14 tests passed.
 - `npm --prefix frontend run build`: passed (`tsc -b && vite build`).
-- Backend unit tests: 136 passed (`tests/unit -q`). Backend untouched.
+- Backend unit tests at recording time: 136 passed (`tests/unit -q`). Backend untouched. (Superseded count: 156 unit / 270 integration observed 2026-11-01 in `docs/acceptance-log.md`.)
 
 ## Artefacts (local only, not committed)
 
