@@ -7,6 +7,7 @@ export function shouldPoll(visibilityState: string): boolean {
 /** Poll fn every intervalMs, but only while the page is visible (A28). */
 export function usePolling(fn: () => void | Promise<void>, intervalMs: number, enabled = true): void {
   const ref = useRef(fn);
+  // eslint-disable-next-line react-hooks/refs -- keeping the latest callback in a ref during render is the intended polling pattern here
   ref.current = fn;
   useEffect(() => {
     if (!enabled) return;

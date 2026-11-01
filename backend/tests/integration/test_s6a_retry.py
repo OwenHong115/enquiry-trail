@@ -61,7 +61,7 @@ def _fetch(postgres_db: str, sql: str, params: dict | None = None) -> list:
 def _submit_and_enqueue_sync(postgres_db: str, clock: FakeClock) -> uuid.UUID:
     session = _factory(postgres_db)()
     try:
-        result = submit_intake(
+        submit_intake(
             session,
             PAYLOAD,
             source=SOURCE,
@@ -69,7 +69,6 @@ def _submit_and_enqueue_sync(postgres_db: str, clock: FakeClock) -> uuid.UUID:
             clock=clock,
             routing_config=ROUTING_CONFIG,
         )
-        enquiry_id = result.enquiry_id
     finally:
         session.close()
 

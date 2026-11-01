@@ -28,6 +28,7 @@ export default function DemoPage() {
     } catch (err) { setError(errorMessage(err)); }
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount fetches remote data; setState happens after the await, restructuring would change behaviour
   useEffect(() => { void load(); }, [load]);
 
   async function arm(scenarioId: string) {

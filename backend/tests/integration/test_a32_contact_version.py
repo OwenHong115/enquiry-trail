@@ -390,7 +390,7 @@ def test_a32_unsupported_patch_does_not_advance_link(
 ) -> None:
     clock = FakeClock(T0)
     fake = FakeCrm()
-    first = _submit(postgres_db, _payload(), clock)
+    _submit(postgres_db, _payload(), clock)
     _run_next(postgres_db, clock, fake, "prepare_enquiry")
     _run_next(postgres_db, clock, fake, "sync_contact")
     contact = _contact(postgres_db)

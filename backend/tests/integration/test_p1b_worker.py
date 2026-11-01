@@ -6,12 +6,12 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from app.ports.crm import NotFound, ProviderError
+from app.ports.crm import ProviderError
 from app.services.clock import SystemBusinessClock
 from app.services.intake import submit_intake
 from app.worker.runner import run_forever, run_once

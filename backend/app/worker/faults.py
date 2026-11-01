@@ -15,7 +15,7 @@ the caller's unrelated work.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Callable
+from typing import Any
 
 from app.ports.crm import ProviderError
 

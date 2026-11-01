@@ -19,6 +19,7 @@ export default function EnquiriesPage() {
     } catch (err) { setError(errorMessage(err)); }
   }, [q, attention]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount fetches remote data; setState happens after the await, restructuring would change behaviour
   useEffect(() => { void load(); }, [load]);
   usePolling(load, 10000);
 

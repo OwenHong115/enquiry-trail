@@ -23,6 +23,7 @@ leadops-worker = "app.worker.runner:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "ruff>=0.15",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -35,3 +36,10 @@ testpaths = ["tests/unit"]
 # writes fail with WinError 5. The cache gains nothing here (the suite runs in
 # under a second), so the plugin is disabled rather than warning on every run.
 addopts = "-p no:cacheprovider"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

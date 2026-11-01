@@ -27,7 +27,11 @@ TOKEN = "test-sim-token"
 
 
 def _free_port() -> int:
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
 
 
 @pytest.fixture(scope="module")
@@ -49,7 +53,8 @@ def sim():
             raise RuntimeError("sim did not start")
         yield base
     finally:
-        proc.terminate(); proc.wait(timeout=10)
+        proc.terminate()
+        proc.wait(timeout=10)
 
 
 def _create_run(api_client, scenario_id="demo-happy"):
@@ -341,7 +346,6 @@ def _fault_counts(postgres_db, run_id, fault_id):
 
 
 def test_stale_lease_consumes_no_fault(postgres_db, db_session, seeded_operator):
-    from app.db import fault_repo
     from app.worker.claiming import ClaimedJob, handle_claim
     from support.fake_crm import FakeCrm
     from support.fake_scheduler import FakeScheduler
@@ -441,7 +445,7 @@ def test_finished_run_carries_assertion_results(api_client, db_session, seeded_o
     from app.db import fault_repo
     run = _create_run(api_client, "demo-finish")
     run_id = uuid.UUID(run["id"])
-    fault = fault_repo.arm_fault(
+    fault_repo.arm_fault(
         db_session, run_id=run_id, provider="hubspot",
         mode="http_503_before_write", uses=1,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
