@@ -158,8 +158,8 @@ def test_default_profile_is_fixture() -> None:
 def test_fixture_differs_from_template() -> None:
     fixture = FixtureExtractor().extract(_req())
     template = TemplateExtractor().extract(_req())
-    assert fixture != template
-    assert fixture.timeframe is not None and fixture.timeframe.endswith("(fixture)")
+    assert fixture.timeframe == template.timeframe
+    assert fixture.timeframe == "next month"
     assert fixture.evidence == template.evidence
     cleaned = validate_extraction(fixture, MSG)
     assert cleaned["timeframe"] == fixture.timeframe
@@ -172,3 +172,28 @@ def test_runner_profile_snapshot_records_parameters() -> None:
     profile = _extraction_profile(_Settings(database_url=DB, session_secret="s", extractor_mode="fixture"))
     assert profile.parameters == {"extractor_mode": "fixture", "provider": "fixture"}
     assert profile.parameters != {}
+
+
+def test_fixture_parses_k_shorthand_budget_template_misreads() -> None:
+    # Fixture-only rule: a "20k" budget shorthand means 20000. The
+    # template regex has no such rule and reads the bare digits (20),
+    # so this case separates the two strategies by extracted value.
+    message = "My budget is around 20k. I need a bathroom renovation next month."
+    fixture = validate_extraction(FixtureExtractor().extract(_req(message)), message)
+    template = validate_extraction(TemplateExtractor().extract(_req(message)), message)
+    assert fixture["budget"] == 20000
+    assert template["budget"] != 20000
+
+
+def test_fixture_describes_its_own_strategy_for_snapshot() -> None:
+    # The persisted parameters_snapshot must name the fixture strategy
+    # and the rules it applied, and must differ from the template's.
+    extractor = FixtureExtractor()
+    extractor.extract(_req())
+    described = extractor.describe_parameters()
+    assert described["strategy"] == "fixture-rules"
+    assert described["rules"], "fixture must report the rules it applied"
+    template_describe = getattr(TemplateExtractor(), "describe_parameters", None)
+    template_params = template_describe() if template_describe else {}
+    assert described != template_params
+    assert template_params.get("strategy") != "fixture-rules"
