@@ -17,6 +17,8 @@ observed percentiles are printed verbatim for docs/perf-evidence.md.
 
 Environment:
   PERF_BASE_URL   default http://127.0.0.1:8080
+  PERF_ORIGIN     Origin header to send (default: PERF_BASE_URL); set it to the
+                  web origin when the API only allows that exact origin.
   PERF_USERNAME / PERF_PASSWORD (or E2E_USERNAME / E2E_PASSWORD)
   PERF_WARMUP=10  PERF_N=100  PERF_CONCURRENCY=5  PERF_COMMIT (optional)
 """
@@ -44,7 +46,7 @@ def _request(method, path, body=None, headers=None, cookie=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(BASE + path, data=data, method=method)
     req.add_header("Content-Type", "application/json")
-    req.add_header("Origin", BASE)
+    req.add_header("Origin", os.environ.get("PERF_ORIGIN", BASE))
     if cookie:
         req.add_header("Cookie", cookie)
     for key, value in (headers or {}).items():
