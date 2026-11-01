@@ -34,6 +34,15 @@
 #                       log in and create a fresh enquiry through the
 #                       intake API, so the claim barrier below starts
 #                       from a known, not-yet-claimed job.
+#   A26_WEB_ORIGIN      optional: web UI origin sent as the Origin
+#                       header on the intake request (the -WebOrigin
+#                       parameter wins). Default:
+#                       http://127.0.0.1:5173. The Origin must be an
+#                       allowed web origin (one of ALLOWED_ORIGINS when
+#                       that is explicitly configured), not the API
+#                       base URL ($ApiBaseUrl, http://127.0.0.1:8080);
+#                       sending the API base gets 403 origin_invalid
+#                       when ALLOWED_ORIGINS lists only the web origin.
 #   A26_ENQUIRY_ID      optional: scope the run to one enquiry (the
 #                       -EnquiryId parameter wins). Without it, and
 #                       without operator credentials to create one,
@@ -56,7 +65,8 @@ param(
     [string]$RecordPath = "docs/a26-compose-recovery-evidence.md",
     [int]$ClaimTimeoutSeconds = 120,
     [int]$DrainTimeoutSeconds = 120,
-    [string]$ApiBaseUrl = "http://127.0.0.1:8080"
+    [string]$ApiBaseUrl = "http://127.0.0.1:8080",
+    [string]$WebOrigin = $(if ($env:A26_WEB_ORIGIN) { $env:A26_WEB_ORIGIN } else { "http://127.0.0.1:5173" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -170,7 +180,7 @@ function New-A26Enquiry {
     $headers = @{
         "Idempotency-Key" = [Guid]::NewGuid().ToString()
         "X-CSRF-Token" = $csrf
-        "Origin" = $base
+        "Origin" = $WebOrigin.TrimEnd("/")
     }
     $receipt = Invoke-WebRequest -Uri "$base/api/v1/intake/form" -Method Post -Body $payload -ContentType "application/json" -Headers $headers -WebSession $webSession -UseBasicParsing
     return [string](($receipt.Content | ConvertFrom-Json).enquiry_id)
