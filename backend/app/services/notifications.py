@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session
 from app.db import job_repo, notification_repo
 from app.ports.notifications import (
     NotificationContext,
-    NotificationError,
     NotificationPort,
     ReadyNotification,
 )

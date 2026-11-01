@@ -20,7 +20,6 @@ from __future__ import annotations
 import uuid
 
 from starlette.datastructures import Headers
-from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.api.errors import error_body

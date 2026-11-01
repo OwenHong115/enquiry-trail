@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from app.ports.crm import ProviderError
 from support.fake_clock import FakeClock
 from support.fake_crm import FakeCrm
 from test_r16_operator_retry import _drive_dead_sync, _claim, _handle, CSRF_HEADER

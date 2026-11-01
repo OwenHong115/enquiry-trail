@@ -353,7 +353,7 @@ def test_tasks_overdue_filter(api_client: TestClient, postgres_db: str) -> None:
     overdue = _list(api_client, "/api/v1/tasks?overdue=true").json()
     assert len(overdue["items"]) == 1
     assert overdue["items"][0]["enquiry"]["id"] == receipt["enquiry_id"]
-    fresh = _submit(api_client, email="fresh@example.com",
-                    message="Fresh task that is not overdue at all here.")
+    _submit(api_client, email="fresh@example.com",
+            message="Fresh task that is not overdue at all here.")
     overdue2 = _list(api_client, "/api/v1/tasks?overdue=true").json()
     assert len(overdue2["items"]) == 1

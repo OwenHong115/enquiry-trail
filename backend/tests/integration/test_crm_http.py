@@ -227,13 +227,12 @@ def test_worker_commit_then_500_readback_reconciles_one_create(sim, postgres_db:
     clock = FakeClock(T0)
     session = _factory(postgres_db)()
     try:
-        result = submit_intake(session, {
+        submit_intake(session, {
             "first_name": "Alex", "last_name": "Morgan", "email": "alex.demo@example.com",
             "phone": "+61412345678", "postcode": "2150", "service_type": "bathroom",
             "message": "I need a bathroom renovation next month. My budget is around AUD 20,000.",
             "preferred_contact": "email", "acknowledge_demo": True,
         }, source="web", event_key=uuid.uuid4(), clock=clock, routing_config=ROUTING_CONFIG)
-        enquiry_id = result.enquiry_id
     finally:
         session.close()
 

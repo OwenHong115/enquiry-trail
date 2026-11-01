@@ -200,7 +200,7 @@ def test_a20_definite_failure_records_failed(postgres_db: str) -> None:
 def test_retryable_failure_uses_job_retry_then_succeeds(postgres_db: str) -> None:
     clock = FakeClock(T0)
     fake = FakeNotifications(error=NotificationError("unavailable"))
-    enquiry_id = _submit(postgres_db, clock)
+    _submit(postgres_db, clock)
     _drain(postgres_db, clock, FakeCrm(), notifications=fake)
 
     rows = _notifications(postgres_db)
