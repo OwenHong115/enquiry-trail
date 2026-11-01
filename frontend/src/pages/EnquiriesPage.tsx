@@ -50,7 +50,7 @@ export default function EnquiriesPage() {
           <thead><tr><th>Reference</th><th>Received</th><th>Service</th><th>Status</th><th>Attention</th><th>CRM</th><th>Contact</th></tr></thead>
           <tbody>
             {data.items.map((it) => (
-              <tr key={it.id}>
+              <tr key={it.id} data-testid={`enquiry-row-${it.id}`}>
                 <td><a href={`#/enquiries/${it.id}`}>{it.display_no}</a></td>
                 <td>{new Date(it.received_at).toLocaleString()}</td>
                 <td>{it.service_type}</td>
