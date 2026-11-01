@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+
+import pytest
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, text
@@ -160,3 +162,60 @@ def test_detail_enrichment_populated(postgres_db):
     assert detail.enrichment["budget"] == 20000
     assert detail.enrichment["timeframe"] == "next month"
     assert detail.enrichment["evidence"] == "My budget is around AUD 20,000."
+
+
+# 20-case matrix (A21): (label, extractor result/error, expected result_json, expected status)
+_MSG = PAYLOAD["message"]
+_CASES = [
+    ("valid", ExtractionResult(budget=20000, timeframe="next month", evidence="My budget is around AUD 20,000."), {"budget": 20000, "timeframe": "next month", "evidence": "My budget is around AUD 20,000."}, "fixture"),
+    ("currency-string", ExtractionResult(budget="AUD 20,000", timeframe="next month", evidence="My budget is around AUD 20,000."), {"budget": 20000, "timeframe": "next month", "evidence": "My budget is around AUD 20,000."}, "fixture"),
+    ("float-budget", ExtractionResult(budget=1500.5, timeframe="next month", evidence=None), {"budget": 1500.5, "timeframe": "next month", "evidence": None}, "fixture"),
+    ("non-numeric", ExtractionResult(budget="lots", timeframe="next month", evidence=None), {"budget": None, "timeframe": "next month", "evidence": None}, "fixture"),
+    ("negative", ExtractionResult(budget=-100, timeframe="next month", evidence=None), {"budget": None, "timeframe": "next month", "evidence": None}, "fixture"),
+    ("bool", ExtractionResult(budget=True, timeframe="next month", evidence=None), {"budget": None, "timeframe": "next month", "evidence": None}, "fixture"),
+    ("zero", ExtractionResult(budget=0, timeframe="next month", evidence=None), {"budget": 0, "timeframe": "next month", "evidence": None}, "fixture"),
+    ("huge", ExtractionResult(budget=10**15, timeframe="next month", evidence=None), {"budget": 10**15, "timeframe": "next month", "evidence": None}, "fixture"),
+    ("missing-all", ExtractionResult(budget=None, timeframe=None, evidence=None), {"budget": None, "timeframe": None, "evidence": None}, "fixture"),
+    ("evidence-not-in-message", ExtractionResult(budget=20000, timeframe="next month", evidence="not in the message"), {"budget": 20000, "timeframe": "next month", "evidence": None}, "fixture"),
+    ("blank-evidence", ExtractionResult(budget=20000, timeframe="next month", evidence="   "), {"budget": 20000, "timeframe": "next month", "evidence": None}, "fixture"),
+    ("blank-timeframe", ExtractionResult(budget=20000, timeframe="   ", evidence=None), {"budget": 20000, "timeframe": None, "evidence": None}, "fixture"),
+    ("long-timeframe", ExtractionResult(budget=20000, timeframe="x" * 201, evidence=None), {"budget": 20000, "timeframe": None, "evidence": None}, "fixture"),
+    ("timeframe-variant", ExtractionResult(budget=None, timeframe="within 2 weeks", evidence=None), {"budget": None, "timeframe": "within 2 weeks", "evidence": None}, "fixture"),
+    ("nan-budget", ExtractionResult(budget=float("nan"), timeframe=None, evidence=None), {"budget": None, "timeframe": None, "evidence": None}, "fixture"),
+    ("list-budget", ExtractionResult(budget=[20000], timeframe=None, evidence=None), {"budget": None, "timeframe": None, "evidence": None}, "fixture"),
+    ("error-unavailable", ExtractionError("unavailable"), None, "template_fallback"),
+    ("error-timeout-like", ExtractionError("connect_failed"), None, "template_fallback"),
+    ("generic-error", RuntimeError("boom"), None, "template_fallback"),
+    ("invalid-response-type", "not-a-result", None, "template_fallback"),
+]
+
+
+@pytest.mark.parametrize("label,result,expected,status", _CASES, ids=[c[0] for c in _CASES])
+def test_extraction_matrix(postgres_db, label, result, expected, status):
+    enquiry_id = _submit(postgres_db, email=f"matrix-{label}@example.com")
+    if isinstance(result, BaseException):
+        extractor = FakeExtractor(error=result)
+    elif isinstance(result, ExtractionResult):
+        extractor = FakeExtractor(result=result)
+    else:
+        extractor = FakeExtractor(result=result)  # invalid type triggers fallback
+    _prepare(postgres_db, extractor)
+    rows = _fetch(postgres_db, "SELECT status, result_json FROM leadops.enrichments WHERE enquiry_id=:e", {"e": enquiry_id})
+    assert len(rows) == 1
+    assert rows[0].status == status
+    if expected is not None:
+        assert rows[0].result_json == expected
+    else:
+        # Fallback is the deterministic template extraction of the message.
+        assert rows[0].result_json["budget"] == 20000
+        assert rows[0].result_json["evidence"] == "My budget is around AUD 20,000."
+
+
+def test_worker_template_mode_prepare(postgres_db):
+    from app.adapters.extraction_template import TemplateExtractor
+    enquiry_id = _submit(postgres_db, email="template-mode@example.com")
+    profile = ExtractionProfile(mode="template", provider="template", model="fixture-model", prompt_version="v1", parameters={"temperature": 0})
+    _prepare(postgres_db, TemplateExtractor(), profile=profile)
+    rows = _fetch(postgres_db, "SELECT status, result_json FROM leadops.enrichments WHERE enquiry_id=:e", {"e": enquiry_id})
+    assert rows[0].status == "template_fallback"
+    assert rows[0].result_json["budget"] == 20000

@@ -11,7 +11,7 @@ this repository) gives these enums:
                      reconciling, synced, blocked, failed
   Attention:         none, review_required, retry_scheduled,
                      notification_uncertain,
-                     integration_blocked, intervention_required
+                     integration_blocked, needs_intervention
 
 and this per-state table (summary, attention, crm.status,
 crm.next_attempt_at):
@@ -21,7 +21,7 @@ crm.next_attempt_at):
   blocked        blocked      integration_blocked   blocked        null
   reconciling    reconciling  none                  reconciling    null
   ready          ready        none                  synced         null
-  failed (dead)  failed       intervention_required failed         null
+  failed (dead)  failed       needs_intervention    failed         null
 
 Also per the contract: local_prepare_dead (the prepare job for
 THIS enquiry is dead) forces processing_summary "failed".
@@ -80,7 +80,7 @@ ATTENTIONS = {
     "retry_scheduled",
     "notification_uncertain",
     "integration_blocked",
-    "intervention_required",
+    "needs_intervention",
 }
 
 DETAIL_KEYS = {
@@ -277,7 +277,7 @@ def test_every_state_publishes_only_contract_values(
     _assert_contract_state(
         _detail(api_client, failed.enquiry_id),
         "failed",
-        "intervention_required",
+        "needs_intervention",
         "failed",
         False,
     )
@@ -391,7 +391,7 @@ def test_dead_prepare_job_is_visible(
     # local_prepare_dead forces the failed summary, and the dead
     # job is an intervention, not a routine review.
     assert body["processing_summary"] == "failed"
-    assert body["attention"] == "intervention_required"
+    assert body["attention"] == "needs_intervention"
     assert body["crm"]["status"] == "pending"
     assert body["crm"]["next_attempt_at"] is None
 

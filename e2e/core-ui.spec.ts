@@ -8,7 +8,13 @@ const username = process.env.E2E_USERNAME ?? "";
 const password = process.env.E2E_PASSWORD ?? "";
 
 function requireCredentials() {
-  test.skip(!username || !password, "E2E_USERNAME/E2E_PASSWORD not set");
+  if (!username || !password) {
+    const missing = [
+      !username && "E2E_USERNAME",
+      !password && "E2E_PASSWORD",
+    ].filter(Boolean).join(", ");
+    throw new Error(`Signed-in E2E specs require credentials; missing: ${missing}`);
+  }
 }
 
 async function signIn(page: Page) {
@@ -50,14 +56,24 @@ test("login page has labelled fields and synthetic badge", async ({ page }) => {
 });
 
 test("six core routes are reachable after sign-in", async ({ page }) => {
-  test.skip(!process.env.E2E_USERNAME, "E2E_USERNAME/E2E_PASSWORD not set");
+  requireCredentials();
+  // Login is the gate: assert its labelled landmark before signing in.
   await page.goto(base);
-  await page.getByLabel(/username/i).fill(process.env.E2E_USERNAME ?? "");
-  await page.getByLabel(/password/i).fill(process.env.E2E_PASSWORD ?? "");
-  await page.getByRole("button", { name: /sign in/i }).click();
-  for (const route of ["#/quote", "#/enquiries", "#/tasks", "#/integrations"]) {
-    await page.goto(`${base}/${route}`);
+  await expect(page.getByRole("heading", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByLabel(/username/i)).toBeVisible();
+  await signIn(page);
+  const routes: Array<{ hash: string; landmark: () => ReturnType<Page["getByRole"]> }> = [
+    { hash: "#/quote", landmark: () => page.getByRole("heading", { name: /request a quote/i }) },
+    { hash: "#/enquiries", landmark: () => page.getByRole("heading", { name: /^enquiries$/i }) },
+    { hash: "#/tasks", landmark: () => page.getByRole("heading", { name: /follow-up tasks/i }) },
+    { hash: "#/integrations", landmark: () => page.getByRole("heading", { name: /^integrations$/i }) },
+    { hash: "#/demo", landmark: () => page.getByRole("heading", { name: /failure demonstration/i }) },
+    { hash: "#/login", landmark: () => page.getByText(new RegExp(`signed in as ${username}`, "i")) },
+  ];
+  for (const route of routes) {
+    await page.goto(`${base}/${route.hash}`);
     await expect(page.locator("main")).toBeVisible();
+    await expect(route.landmark()).toBeVisible();
   }
 });
 
@@ -156,6 +172,7 @@ test("draft edit is retained after a forced 409 conflict", async ({ page, browse
   await page.getByLabel(/draft body/i).fill(retainedBody);
   await page.getByRole("button", { name: /save draft/i }).click();
   await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(/draft version conflict/i);
   await expect(page.getByLabel(/draft subject/i)).toHaveValue(retainedSubject);
   await expect(page.getByLabel(/draft body/i)).toHaveValue(retainedBody);
 });

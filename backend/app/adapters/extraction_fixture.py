@@ -13,4 +13,9 @@ class FixtureExtractor:
         self._template = TemplateExtractor()
 
     def extract(self, request: ExtractionRequest) -> ExtractionResult:
-        return self._template.extract(request)
+        result = self._template.extract(request)
+        # Distinguishable from a bare template alias: fixture mode marks
+        # its timeframe deterministically while keeping evidence verbatim
+        # so validation still accepts it as a substring of the message.
+        timeframe = f"{result.timeframe} (fixture)" if result.timeframe else "fixture"
+        return ExtractionResult(budget=result.budget, timeframe=timeframe, evidence=result.evidence)
