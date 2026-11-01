@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, IntegrityError, InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import intake_repo, job_repo
@@ -51,6 +51,18 @@ class IntakeUnavailableError(Exception):
     errors (for example the routing-owner ValueError) never become
     this error; they propagate unchanged.
     """
+
+
+def _is_retryable_db_failure(err: DBAPIError) -> bool:
+    # Only transient database failures are retryable 503s:
+    # OperationalError (database operational/connection failure) and
+    # InterfaceError (driver interface/connection failure), plus any
+    # DBAPIError that SQLAlchemy flagged connection_invalidated.
+    # Permanent errors such as ProgrammingError and non-receipt
+    # IntegrityError are not flagged and must propagate as 500.
+    return isinstance(err, (OperationalError, InterfaceError)) or bool(
+        err.connection_invalidated
+    )
 
 
 class _ReceiptUniqueViolation(Exception):
@@ -400,7 +412,9 @@ def submit_intake(
             clock=clock,
             routing_config=routing_config,
         )
-    except SQLAlchemyError as err:
+    except DBAPIError as err:
+        if not _is_retryable_db_failure(err):
+            raise
         raise IntakeUnavailableError(
             "intake database transaction failed"
         ) from err
@@ -425,7 +439,9 @@ def submit_intake(
                         session, existing.enquiry_id
                     ),
                 )
-        except SQLAlchemyError as err:
+        except DBAPIError as err:
+            if not _is_retryable_db_failure(err):
+                raise
             raise IntakeUnavailableError(
                 "intake database transaction failed"
             ) from err

@@ -15,7 +15,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
 from app.db import intake_repo
 from app.services import intake as intake_service
@@ -112,6 +112,49 @@ def test_a25_database_failure_is_503_atomic_and_retryable(
     assert retry.status_code == 202, retry.text
     assert retry.json()["replayed"] is False
     assert _counts(postgres_db) == {table: 1 for table in COUNT_TABLES}
+
+
+def test_a25_programming_error_still_returns_500(
+    api_client: TestClient,
+    postgres_db: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail(*args: object, **kwargs: object) -> None:
+        raise ProgrammingError(
+            "INSERT INTO leadops.jobs", {}, Exception("syntax error")
+        )
+
+    monkeypatch.setattr(intake_repo, "insert_initial_job", _fail)
+
+    response = _submit(api_client, ALEX, uuid.uuid4())
+
+    assert response.status_code == 500, response.text
+    error = _error(response)
+    assert error["code"] == "internal_error"
+    assert _counts(postgres_db) == {table: 0 for table in COUNT_TABLES}
+
+
+def test_a25_non_receipt_integrity_error_still_returns_500(
+    api_client: TestClient,
+    postgres_db: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # insert_initial_job is not a receipt insert, so this
+    # IntegrityError is not the receipt-race case: it must not
+    # become a retryable 503.
+    def _fail(*args: object, **kwargs: object) -> None:
+        raise IntegrityError(
+            "INSERT INTO leadops.jobs", {}, Exception("unique violation")
+        )
+
+    monkeypatch.setattr(intake_repo, "insert_initial_job", _fail)
+
+    response = _submit(api_client, ALEX, uuid.uuid4())
+
+    assert response.status_code == 500, response.text
+    error = _error(response)
+    assert error["code"] == "internal_error"
+    assert _counts(postgres_db) == {table: 0 for table in COUNT_TABLES}
 
 
 def test_a25_non_database_error_still_returns_500(
