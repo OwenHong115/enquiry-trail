@@ -178,7 +178,7 @@ def test_enquiries_list_filters(api_client: TestClient, postgres_db: str) -> Non
         ).status_code == 200
     for value in ("none", "review_required", "retry_scheduled",
                   "notification_uncertain", "integration_blocked",
-                  "intervention_required"):
+                  "needs_intervention"):
         assert _list(
             api_client, f"/api/v1/enquiries?attention={value}"
         ).status_code == 200
@@ -247,6 +247,9 @@ def test_list_detail_status_consistency(api_client: TestClient, postgres_db: str
         assert item["crm_status"] == detail["crm"]["status"], enquiry_id
     assert items[ready["enquiry_id"]]["processing_summary"] == "ready"
     assert items[processing["enquiry_id"]]["processing_summary"] == "processing"
+    dead_id = [k for k, v in cases.items() if v == "dead"][0]
+    assert items[dead_id]["attention"] == "needs_intervention"
+    assert api_client.get(f"/api/v1/enquiries/{dead_id}").json()["attention"] == "needs_intervention"
 
 
 def test_tasks_list_shape_filters_and_cursor(
