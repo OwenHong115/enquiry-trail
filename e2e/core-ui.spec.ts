@@ -117,6 +117,11 @@ test("signed-in flow: quote to enquiries to detail to completed task survives re
   await taskCard.getByLabel(/reason \(10-500 characters\)/i).fill("Initial call completed with the customer.");
   await taskCard.getByRole("button", { name: `Complete follow-up for ${displayNo}` }).click();
 
+  // Wait for the post-action reload to settle under the Open filter: the
+  // completed task must leave the open list before the filter is switched,
+  // so a slower stale open response cannot overwrite the completed list.
+  await expect(taskCard).toBeHidden();
+
   // Completed state is shown under the Completed filter, in the same scoped row.
   await page.getByLabel(/task status filter/i).selectOption("completed");
   const completedCard = page.getByTestId(`task-row-${enquiryId}`);
