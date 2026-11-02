@@ -120,7 +120,7 @@ All of P1a, P1b, P2, P3, P4, P5 and P6 are implemented on local `main` (see the 
 | P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | complete on local `main`: A32 contact-version coordination, enquiry/task lists, A33 event timeline, owner actions, integration status/resume and worker health all implemented (acceptance remains operator-signed); changed contact data is a new enquiry under the existing canonical fingerprint (strict dedup, no content-only dedup) |
 | S9 UI, delivery | UI complete (P4 core UI implemented); Slack notifications and fault demo implemented; connected mode implemented but UNVERIFIED pending M0 (P7, see docs/connected-handover.md); `scripts/perf_measure.py` and `docs/perf-evidence.md` record a local sample only |
 
-Acceptance verdicts all stay PENDING OPERATOR in `docs/acceptance-log.md`. Items without automated evidence there: A26, A30, C01, C02 (C01/C02 excluded by the external contract-package boundary); A14/A22 are PARTIAL. Connected mode (M0 O01-O04) is UNVERIFIED.
+Acceptance verdicts all stay PENDING OPERATOR in `docs/acceptance-log.md`. A26 has automated process-level evidence plus a compose-form live record (2026-11-02 PASS, `docs/a26-compose-recovery-evidence.md`); items without live-provider automated evidence: A30, C01, C02 (C01/C02 excluded by the external contract-package boundary); A22 is PARTIAL. Connected mode (M0 O01-O04) is UNVERIFIED.
 
 ## Working protocol
 

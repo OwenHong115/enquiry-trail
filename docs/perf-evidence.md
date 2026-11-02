@@ -4,6 +4,18 @@ Local evidence sample only. These numbers describe one run on one
 developer machine against the isolated local Compose stack. They are
 not a production guarantee and do not sign off any acceptance item.
 
+## Latest run (2026-11-02, at commit `2ec5927`)
+
+- Protocol: warmup 10, then N=100 at concurrency 5; errors 0; exit 0.
+- Environment: CPU Intel64 Family 6 Model 183 (32 logical), RAM
+  31.7 GiB, OS Windows 11, profile `mock`.
+- Observed: intake p50=41.9 p95=84.2 max=100.3 ms; time-to-ready
+  p50=553.1 p95=1204.7 max=1291.6 ms.
+- The script now emits the contract fields and exits 2 on a missed
+  target (see "Sampler report format" below).
+
+## Historical run
+
 ## Run identity
 
 - Branch: `feat/e2e-perf-small-gaps`
@@ -53,5 +65,6 @@ The sampler prints every `verification.yaml` performance report field:
 and the full report is still printed. The exit code is 0 only when
 both p95 targets are met and `errors` is 0; it is 2 when either p95
 target is missed or `errors` > 0. The verbatim sample above predates
-the `profile`/`N`/`errors` lines and is left unchanged; no new
-measurements are recorded here.
+the `profile`/`N`/`errors` lines and is left unchanged; this
+historical run section is no longer updated - new measurements are
+recorded in the Latest run section above.
