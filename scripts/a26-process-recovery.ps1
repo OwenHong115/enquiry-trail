@@ -10,6 +10,13 @@
 # drain, then counts persisted rows for that enquiry/contact only and
 # prints PASS/FAIL (exit code is non-zero on any mismatch).
 #
+# Stage proved by this script: the kill lands while the claimed job
+# (its kind is recorded in the record) is at the prepare stage,
+# blocked on crm_links before any remote write. This record does
+# not claim a post-remote-write crash; the prepare-stage kill is
+# what this record proves; remote-write crash recovery is A14's
+# evidence.
+#
 # Header note on evidence: simulator counts are NOT connected evidence.
 # The provider-sim counters only describe the local simulator process;
 # they do not prove anything about a real CRM provider. Persisted
@@ -358,6 +365,7 @@ function Write-RecoveryRecord([string]$Verdict) {
         "- Enquiry ID: $($script:enquiryId)",
         "- Contact ID: $($script:contactId)",
         "- Claimed job (id|kind) observed before kill: $($script:claimedJob)",
+        "- In-flight stage proved: prepare-stage kill before any remote write (claimed job kind above); not a post-remote-write crash - remote-write crash recovery is A14's evidence.",
         "- Verdict: $Verdict",
         "",
         "## Steps",
@@ -435,10 +443,21 @@ try {
     if ((Invoke-Compose @("kill", "worker")) -ne 0) { throw "docker compose kill worker failed" }
     Add-Step "worker killed; stopping crm_links lock-holder before lease expiry and restart..."
     Stop-CrmLinksLock -RequireRelease
-    Invoke-Compose @("ps", "worker", "--format", "{{.State}}") | Out-Null
-    $workerState = ($script:lastComposeOutput | Out-String).Trim()
+    Invoke-Compose @("ps", "-a", "worker", "--format", "{{.State}}") | Out-Null
+    $workerStateLines = @($script:lastComposeOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    $workerState = if ($workerStateLines.Count -gt 0) { $workerStateLines[0].ToLowerInvariant() } else { "" }
+    if (-not $workerState) {
+        Invoke-Compose @("ps", "-a", "-q", "worker") | Out-Null
+        $workerIds = @($script:lastComposeOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+        if ($workerIds.Count -eq 0) { $workerState = "stopped-absent" }
+    }
+    # $workerState was normalized from the ps -a output above; an
+    # empty value here means the state could not be parsed and the
+    # worker_stopped_after_kill check below must fail, not pass.
     $script:counts["worker_state_after_kill"] = $workerState
     Add-Step "worker state after kill = $workerState"
+    $workerStopped = if ($workerState -eq "exited" -or $workerState -eq "stopped-absent") { "stopped" } else { "not-stopped:$workerState" }
+    Check "worker_stopped_after_kill" $workerStopped "stopped"
 
     # Expire only this enquiry's orphaned lease (same scoped job set as
     # the barrier), so the restarted worker can reclaim it at once
@@ -469,6 +488,28 @@ try {
     Check "notifications_for_enquiry" (Invoke-PsqlScalar "SELECT count(*) FROM leadops.notifications WHERE enquiry_id = '$($script:enquiryId)'") 0
     foreach ($eventType in @("enquiry.received", "enquiry.prepared", "crm.synced")) {
         Check "event_$eventType" (Invoke-PsqlScalar "SELECT count(*) FROM leadops.activity_events WHERE enquiry_id = '$($script:enquiryId)' AND event_type = '$eventType'") 1
+    }
+
+    # Remote uniqueness for this target only (not global sim counts):
+    # exactly one remote contact with the target contact's email, and
+    # its id must equal this contact's crm_links.remote_id.
+    try {
+        $targetEmail = Invoke-PsqlScalar "SELECT leadops.contacts.email_norm FROM leadops.enquiries JOIN leadops.contacts ON leadops.contacts.id = leadops.enquiries.contact_id WHERE leadops.enquiries.id = '$($script:enquiryId)'"
+        if (-not $targetEmail) { throw "target contact email not found for enquiry $($script:enquiryId)" }
+        $linkedRemoteId = Invoke-PsqlScalar "SELECT remote_id FROM leadops.crm_links WHERE contact_id = '$($script:contactId)'"
+        if (-not $linkedRemoteId) { throw "crm_links.remote_id not found for contact $($script:contactId)" }
+        $encodedEmail = [Uri]::EscapeDataString($targetEmail.Trim())
+        $simContactsRaw = docker compose exec -T provider-sim python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8091/__test__/contacts?email=$encodedEmail').read().decode())"
+        if ($LASTEXITCODE -ne 0) { throw "provider-sim contacts query failed (exit $LASTEXITCODE)" }
+        $simContacts = (($simContactsRaw | Out-String).Trim() | ConvertFrom-Json)
+        $remoteContacts = @($simContacts.contacts)
+        Check "remote_contacts_for_target_email" $remoteContacts.Count 1
+        $remoteIdMatches = ($remoteContacts.Count -eq 1 -and [string]$remoteContacts[0].id -eq $linkedRemoteId.Trim())
+        Check "remote_id_matches_link" $remoteIdMatches $true
+    } catch {
+        Add-Step "remote uniqueness check failed: $($_.Exception.Message)"
+        Check "remote_contacts_for_target_email" "unavailable" 1
+        Check "remote_id_matches_link" $false $true
     }
 
     # Simulator counts are reported for local diagnosis only (see header):
