@@ -65,5 +65,6 @@ The sampler prints every `verification.yaml` performance report field:
 and the full report is still printed. The exit code is 0 only when
 both p95 targets are met and `errors` is 0; it is 2 when either p95
 target is missed or `errors` > 0. The verbatim sample above predates
-the `profile`/`N`/`errors` lines and is left unchanged; no new
-measurements are recorded here.
+the `profile`/`N`/`errors` lines and is left unchanged; this
+historical run section is no longer updated - new measurements are
+recorded in the Latest run section above.

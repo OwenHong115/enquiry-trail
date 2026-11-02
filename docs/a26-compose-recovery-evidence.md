@@ -1,4 +1,4 @@
-﻿# A26 compose process-recovery evidence
+# A26 compose process-recovery evidence
 
 Filled by scripts/a26-process-recovery.ps1 from an actual run. The committed copy before any run is only a template.
 
@@ -21,27 +21,27 @@ Filled by scripts/a26-process-recovery.ps1 from an actual run. The committed cop
 - waiting up to 120s for a prepare/sync job of this enquiry to be claimed (state='running', lease set)...
 - claim barrier passed: claimed job (id|kind) = 7790ad74-c303-46cc-8307-760c4fe45e55|prepare_enquiry
 - killing worker service (docker compose kill worker)...
-- docker compose kill worker:  Container enquirytrail-worker-1 Killing 
-- docker compose kill worker:  Container enquirytrail-worker-1 Killed 
+- docker compose kill worker:  Container enquirytrail-worker-1 Killing
+- docker compose kill worker:  Container enquirytrail-worker-1 Killed
 - worker killed; stopping crm_links lock-holder before lease expiry and restart...
 - crm_links lock released: lock-holder process 13024 stopped; bounded pg_sleep(180) auto-release remains as backstop if the session lingers
 - crm_links lock backend terminated: 339035
 - crm_links lock confirmed released
-- worker state after kill = 
+- worker state after kill =
 - target enquiry leases expired = 1
 - restarting worker service...
-- docker compose up -d worker:  Container enquirytrail-db-1 Running 
-- docker compose up -d worker:  Container enquirytrail-provider-sim-1 Running 
-- docker compose up -d worker:  Container enquirytrail-db-1 Waiting 
-- docker compose up -d worker:  Container enquirytrail-db-1 Healthy 
-- docker compose up -d worker:  Container enquirytrail-migrate-1 Starting 
-- docker compose up -d worker:  Container enquirytrail-migrate-1 Started 
-- docker compose up -d worker:  Container enquirytrail-provider-sim-1 Waiting 
-- docker compose up -d worker:  Container enquirytrail-migrate-1 Waiting 
-- docker compose up -d worker:  Container enquirytrail-provider-sim-1 Healthy 
-- docker compose up -d worker:  Container enquirytrail-migrate-1 Exited 
-- docker compose up -d worker:  Container enquirytrail-worker-1 Starting 
-- docker compose up -d worker:  Container enquirytrail-worker-1 Started 
+- docker compose up -d worker:  Container enquirytrail-db-1 Running
+- docker compose up -d worker:  Container enquirytrail-provider-sim-1 Running
+- docker compose up -d worker:  Container enquirytrail-db-1 Waiting
+- docker compose up -d worker:  Container enquirytrail-db-1 Healthy
+- docker compose up -d worker:  Container enquirytrail-migrate-1 Starting
+- docker compose up -d worker:  Container enquirytrail-migrate-1 Started
+- docker compose up -d worker:  Container enquirytrail-provider-sim-1 Waiting
+- docker compose up -d worker:  Container enquirytrail-migrate-1 Waiting
+- docker compose up -d worker:  Container enquirytrail-provider-sim-1 Healthy
+- docker compose up -d worker:  Container enquirytrail-migrate-1 Exited
+- docker compose up -d worker:  Container enquirytrail-worker-1 Starting
+- docker compose up -d worker:  Container enquirytrail-worker-1 Started
 - open jobs for this enquiry = 0
 - prepare_enquiry_jobs_for_enquiry = 1 (expected 1)
 - sync_contact_jobs_for_contact = 1 (expected 1)
@@ -57,7 +57,7 @@ Filled by scripts/a26-process-recovery.ps1 from an actual run. The committed cop
 ## Counts
 
 - claimed_job_before_kill: 7790ad74-c303-46cc-8307-760c4fe45e55|prepare_enquiry
-- worker_state_after_kill: 
+- worker_state_after_kill:
 - target_leases_expired: 1
 - open_jobs_for_enquiry_after_drain: 0
 - prepare_enquiry_jobs_for_enquiry: 1
