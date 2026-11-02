@@ -46,9 +46,14 @@ and handover. UI is P4 and intake security is P3, never P2.
 
 Historical P1a note (2026-10-26): P1b-P7 were still missing then.
 As of 2026-11-01 all of P1b, P2, P3, P4, P5 and P6 are implemented
-on local `main`; P7 connected mode is implemented but UNVERIFIED
-pending M0. No real CRM is called; no acceptance item is signed
-off in code (operator-kept record).
+on local `main`; P7 connected capability is classified four ways in
+`docs/connected-handover.md`: implemented and verified (mock CRM
+adapter vs provider-sim, fixture/template extraction), implemented
+but unverified (HTTP CRM adapter wire behaviour against a real
+provider), not implemented (live extractor for connected mode; real
+provider conformance), and excluded by scope (real HubSpot/LLM calls
+in this delivery); M0 remains open. No real CRM is called; no
+acceptance item is signed off in code (operator-kept record).
 
 ## P1b-2 verification (2026-10-26, local only, not CI)
 

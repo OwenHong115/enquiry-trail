@@ -98,7 +98,7 @@ security (exact Origin, body-size bound, rate limits, trusted proxy,
 signed webhook); P4 core UI and template drafts; P5 AI extraction and
 fallback; P6 controlled failure demonstration; P7 connected verification
 and handover. UI is P4 and intake security is P3, never P2.
-All of P1a, P1b, P2, P3, P4, P5 and P6 are implemented on local `main` (see the status table below). P7 connected verification remains UNVERIFIED pending M0 (see `docs/connected-handover.md`).
+All of P1a, P1b, P2, P3, P4, P5 and P6 are implemented on local `main` (see the status table below). P7 connected capability is classified four ways in `docs/connected-handover.md`: implemented and verified (mock CRM adapter vs provider-sim, fixture/template extraction), implemented but unverified (HTTP CRM adapter wire behaviour against a real provider), not implemented (live extractor for connected mode; real provider conformance), and excluded by scope (real HubSpot/LLM calls in this delivery); M0 remains open.
 
 | Area | Status |
 |---|---|
@@ -118,7 +118,7 @@ All of P1a, P1b, P2, P3, P4, P5 and P6 are implemented on local `main` (see the 
 | P1a HTTP CRM adapter + provider simulator | complete on local `main` (HTTP CRM adapter, ChargeManager-free, plus independent provider simulator) |
 | P1b persistent worker, heartbeat, seed, Compose | complete on local `main`: persistent worker loop, heartbeat rows and `GET /api/v1/health/workers`, seed, Compose stack |
 | P2 business operations/queries (A32, lists, A33, owner actions, integration status, worker health) | complete on local `main`: A32 contact-version coordination, enquiry/task lists, A33 event timeline, owner actions, integration status/resume and worker health all implemented (acceptance remains operator-signed); changed contact data is a new enquiry under the existing canonical fingerprint (strict dedup, no content-only dedup) |
-| S9 UI, delivery | UI complete (P4 core UI implemented); Slack notifications and fault demo implemented; connected mode implemented but UNVERIFIED pending M0 (P7, see docs/connected-handover.md); `scripts/perf_measure.py` and `docs/perf-evidence.md` record a local sample only |
+| S9 UI, delivery | UI complete (P4 core UI implemented); Slack notifications and fault demo implemented; connected capability classified four ways (implemented+verified: mock CRM vs provider-sim, fixture/template extraction; implemented+unverified: HTTP CRM adapter vs a real provider; not implemented: live extractor, real provider conformance; excluded by scope: real HubSpot/LLM calls) pending M0 (P7, see docs/connected-handover.md); `scripts/perf_measure.py` and `docs/perf-evidence.md` record a local sample only |
 
 Acceptance verdicts all stay PENDING OPERATOR in `docs/acceptance-log.md`. A26 has automated process-level evidence plus a compose-form live record (2026-11-02 PASS, `docs/a26-compose-recovery-evidence.md`); items without live-provider automated evidence: A30, C01, C02 (C01/C02 excluded by the external contract-package boundary); A22 is PARTIAL. Connected mode (M0 O01-O04) is UNVERIFIED.
 
