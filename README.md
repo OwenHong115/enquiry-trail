@@ -70,7 +70,7 @@ E2E_USERNAME=demo-operator E2E_PASSWORD=<seed-operator-password> npm run test
 
 On Windows PowerShell, set `E2E_USERNAME` and `E2E_PASSWORD` as
 environment variables before running `npm run test`. Without those
-credentials the credential-gated specs skip; in CI they are provided
+credentials the credential-gated specs FAIL (not skip); in CI they are provided
 from CI-only values so the suite runs in full.
 
 Live provider tests (opt-in only, against a dedicated test account;

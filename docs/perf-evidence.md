@@ -4,6 +4,18 @@ Local evidence sample only. These numbers describe one run on one
 developer machine against the isolated local Compose stack. They are
 not a production guarantee and do not sign off any acceptance item.
 
+## Latest run (2026-11-02, at commit `2ec5927`)
+
+- Protocol: warmup 10, then N=100 at concurrency 5; errors 0; exit 0.
+- Environment: CPU Intel64 Family 6 Model 183 (32 logical), RAM
+  31.7 GiB, OS Windows 11, profile `mock`.
+- Observed: intake p50=41.9 p95=84.2 max=100.3 ms; time-to-ready
+  p50=553.1 p95=1204.7 max=1291.6 ms.
+- The script now emits the contract fields and exits 2 on a missed
+  target (see "Sampler report format" below).
+
+## Historical run
+
 ## Run identity
 
 - Branch: `feat/e2e-perf-small-gaps`

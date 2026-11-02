@@ -86,6 +86,14 @@ Running 5 tests using 1 worker
 
 Counts: 5 passed, 0 failed, 0 skipped.
 
+## Latest baseline (2026-11-02, at the `e04ef02` stack)
+
+Live run: **7 passed** (login labelled fields, six routes, PW01/PW02
+signed-in flow, PW03 copy mapping, A22 escaped/no-external, hidden
+polling, draft 409). Requires
+`ALLOWED_ORIGINS=http://127.0.0.1:5173`; the CI e2e job now sets it
+(`.github/workflows/ci.yml`). The 5-test record above is historical.
+
 Flow covered through labelled UI controls only:
 
 1. Signed in as the seeded demo operator.
