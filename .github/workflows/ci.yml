@@ -182,6 +182,23 @@ jobs:
         if: failure()
         run: docker compose logs
 
+      # Playwright config (e2e/playwright.config.ts) writes the HTML report
+      # to ../playwright-report and traces/screenshots/video (retain-on-failure)
+      # to ../test-results, i.e. the repository root; the e2e/ paths cover the
+      # same outputs if the config is ever resolved from the e2e directory.
+      - name: Upload Playwright diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-diagnostics
+          path: |
+            playwright-report/
+            test-results/
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Stop the compose stack
         if: always()
         run: docker compose down -v
