@@ -38,7 +38,7 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
-      SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set to a private random value (see .env.example)}
       SEED_OPERATOR_USERNAME: ${SEED_OPERATOR_USERNAME:-demo-operator}
       SEED_OPERATOR_PASSWORD: ${SEED_OPERATOR_PASSWORD:?set SEED_OPERATOR_PASSWORD to a demo operator password in .env}
     depends_on:
@@ -53,7 +53,7 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
-      SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set to a private random value (see .env.example)}
       APP_BASE_URL: http://127.0.0.1:8080
       # The browser loads the UI from the web service on port 5173 and
       # sends that exact Origin on every unsafe request. The API parses
@@ -94,7 +94,7 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-leadops}:${POSTGRES_PASSWORD:-leadops}@db:5432/${POSTGRES_DB:-leadops}
-      SESSION_SECRET: ${SESSION_SECRET:-compose-local-secret}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set to a private random value (see .env.example)}
       CRM_MODE: ${CRM_MODE:-mock}
       CRM_BASE_URL: ${CRM_BASE_URL:-http://provider-sim:8091}
       CRM_TOKEN: ${CRM_TOKEN:-sim-token}
