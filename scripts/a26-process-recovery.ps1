@@ -124,6 +124,25 @@ function Invoke-Compose([string[]]$ComposeArgs) {
     }
 }
 
+function Resolve-WorkerStopVerdict {
+    # Pure verdict for the post-kill worker state. Only an inspected
+    # 'exited' or 'dead' state with exit code 0 is stopped. A failed
+    # query is container-missing, an empty query is failed:empty-state,
+    # an unknown value is failed:unparseable-state:<value>, and a live
+    # state is not-stopped:<state>. Empty output never passes.
+    param(
+        [int]$ExitCode,
+        [AllowNull()][AllowEmptyString()][string]$RawState
+    )
+    if ($ExitCode -ne 0) { return "container-missing" }
+    if ($null -eq $RawState) { return "failed:empty-state" }
+    $state = $RawState.Trim().ToLowerInvariant()
+    if (-not $state) { return "failed:empty-state" }
+    if ($state -eq "exited" -or $state -eq "dead") { return "stopped" }
+    if ($state -in @("running", "restarting", "paused", "created")) { return "not-stopped:$state" }
+    return "failed:unparseable-state:$state"
+}
+
 function Get-ConfigValue([string]$Name) {
     $fromEnv = [Environment]::GetEnvironmentVariable($Name)
     if ($fromEnv) { return $fromEnv.Trim() }
@@ -439,24 +458,32 @@ try {
     $script:counts["claimed_job_before_kill"] = $script:claimedJob
     Add-Step "claim barrier passed: claimed job (id|kind) = $($script:claimedJob)"
 
+    Add-Step "recording worker container id before kill (docker compose ps -a -q worker)..."
+    $psBeforeKillExit = Invoke-Compose @("ps", "-a", "-q", "worker")
+    if ($psBeforeKillExit -ne 0) { throw "docker compose ps -a -q worker failed before kill (exit $psBeforeKillExit); worker was NOT killed; crm_links lock was released" }
+    $workerIdLines = @($script:lastComposeOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    if ($workerIdLines.Count -ne 1 -or $workerIdLines[0] -notmatch '^[0-9a-fA-F]{12,64}$') { throw "docker compose ps -a -q worker returned unparseable output before kill (lines=$($workerIdLines.Count)); worker was NOT killed; crm_links lock was released" }
+    $workerContainerIdBeforeKill = $workerIdLines[0]
+    $script:counts["worker_container_id_before_kill"] = $workerContainerIdBeforeKill
+    Add-Step "worker_container_id_before_kill = $workerContainerIdBeforeKill"
     Add-Step "killing worker service (docker compose kill worker)..."
     if ((Invoke-Compose @("kill", "worker")) -ne 0) { throw "docker compose kill worker failed" }
     Add-Step "worker killed; stopping crm_links lock-holder before lease expiry and restart..."
     Stop-CrmLinksLock -RequireRelease
-    Invoke-Compose @("ps", "-a", "worker", "--format", "{{.State}}") | Out-Null
-    $workerStateLines = @($script:lastComposeOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
-    $workerState = if ($workerStateLines.Count -gt 0) { $workerStateLines[0].ToLowerInvariant() } else { "" }
-    if (-not $workerState) {
-        Invoke-Compose @("ps", "-a", "-q", "worker") | Out-Null
-        $workerIds = @($script:lastComposeOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
-        if ($workerIds.Count -eq 0) { $workerState = "stopped-absent" }
+    Add-Step "inspecting worker container $workerContainerIdBeforeKill after kill (docker inspect)..."
+    $previousInspectPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $inspectOutput = docker inspect --format '{{.State.Status}}' $workerContainerIdBeforeKill 2>&1
+        $inspectExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousInspectPreference
     }
-    # $workerState was normalized from the ps -a output above; an
-    # empty value here means the state could not be parsed and the
-    # worker_stopped_after_kill check below must fail, not pass.
-    $script:counts["worker_state_after_kill"] = $workerState
-    Add-Step "worker state after kill = $workerState"
-    $workerStopped = if ($workerState -eq "exited" -or $workerState -eq "stopped-absent") { "stopped" } else { "not-stopped:$workerState" }
+    $inspectLines = @($inspectOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    $workerStateRaw = if ($inspectLines.Count -eq 1) { $inspectLines[0] } elseif ($inspectLines.Count -eq 0) { "" } else { $inspectLines -join "`n" }
+    $script:counts["worker_state_after_kill"] = $workerStateRaw
+    Add-Step "worker state after kill = $workerStateRaw (docker inspect exit $inspectExitCode)"
+    $workerStopped = Resolve-WorkerStopVerdict -ExitCode $inspectExitCode -RawState $workerStateRaw
     Check "worker_stopped_after_kill" $workerStopped "stopped"
 
     # Expire only this enquiry's orphaned lease (same scoped job set as
