@@ -186,24 +186,77 @@ function Get-CrmLockHolderArgumentString {
     return "compose exec -T -e PGPASSWORD db psql -U $($script:dbParts.User) -d $($script:dbParts.Database) -v ON_ERROR_STOP=1 -c `"$sql`""
 }
 
-function Stop-CrmLinksLock {
+function Confirm-CrmLinksLockReleased {
+    # Poll pg_locks for a granted AccessExclusiveLock on leadops.crm_links for up to 30s; if still held, terminate the holding backend(s), then poll again until free (up to 30s). Returns $true only when no granted AccessExclusiveLock remains. May throw when DB is unreachable; callers decide whether to gate (throw) or swallow (finally path).
+    $lockQuery = "SELECT count(*) FROM pg_locks WHERE locktype='relation' AND relation='leadops.crm_links'::regclass AND granted AND mode='AccessExclusiveLock'"
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        $held = Invoke-PsqlScalar $lockQuery
+        if ($held -match '^\d+$' -and [int]$held -eq 0) { Add-Step "crm_links lock confirmed released"; return $true }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    $held = Invoke-PsqlScalar $lockQuery
+    if ($held -match '^\d+$' -and [int]$held -eq 0) { Add-Step "crm_links lock confirmed released"; return $true }
+    $pidsRaw = Invoke-PsqlScalar "SELECT pid FROM pg_locks WHERE locktype='relation' AND relation='leadops.crm_links'::regclass AND granted AND mode='AccessExclusiveLock'"
+    $pids = @($pidsRaw -split '\s+' | Where-Object { $_ -match '^\d+$' })
+    Invoke-PsqlScalar "SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype='relation' AND relation='leadops.crm_links'::regclass AND granted AND mode='AccessExclusiveLock'" | Out-Null
+    foreach ($pidValue in $pids) { Add-Step "crm_links lock backend terminated: $pidValue" }
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        $held = Invoke-PsqlScalar $lockQuery
+        if ($held -match '^\d+$' -and [int]$held -eq 0) { Add-Step "crm_links lock confirmed released"; return $true }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    $held = Invoke-PsqlScalar $lockQuery
+    if ($held -match '^\d+$' -and [int]$held -eq 0) { Add-Step "crm_links lock confirmed released"; return $true }
+    return $false
+}
+
+function Stop-CrmLinksLock([switch]$RequireRelease) {
     # Idempotent: safe from the post-kill step and the finally path.
-    if ($null -eq $script:lockHolder) { return }
-    $holder = $script:lockHolder
-    $script:lockHolder = $null
-    $wasHeld = $script:lockHeld
-    $script:lockHeld = $false
-    try {
-        $holder.Refresh()
-        if ($holder.HasExited) {
-            Add-Step "crm_links lock released: lock-holder process $($holder.Id) already exited (bounded pg_sleep($($script:lockHoldSeconds)) session ended); wasHeld=$wasHeld"
-            return
+    # With -RequireRelease (post-kill), the release is verified via
+    # Confirm-CrmLinksLockReleased and failure throws before lease
+    # expiry/restart. Without it (finally), confirmation is best-effort:
+    # DB errors are swallowed/step-logged so the primary error is kept.
+    if ($null -eq $script:lockHolder -and -not $RequireRelease) { return }
+    $hadHolder = $null -ne $script:lockHolder
+    if ($hadHolder) {
+        $holder = $script:lockHolder
+        $script:lockHolder = $null
+        $wasHeld = $script:lockHeld
+        $script:lockHeld = $false
+        try {
+            $holder.Refresh()
+            if ($holder.HasExited) {
+                Add-Step "crm_links lock released: lock-holder process $($holder.Id) already exited (bounded pg_sleep($($script:lockHoldSeconds)) session ended); wasHeld=$wasHeld"
+            } else {
+                Stop-Process -Id $holder.Id -Force -ErrorAction Stop
+                try { $holder.WaitForExit(5000) | Out-Null } catch { }
+                Add-Step "crm_links lock released: lock-holder process $($holder.Id) stopped; bounded pg_sleep($($script:lockHoldSeconds)) auto-release remains as backstop if the session lingers"
+            }
+        } catch {
+            Add-Step "crm_links lock released: stopping lock-holder process $($holder.Id) failed ($($_.Exception.Message)); bounded pg_sleep($($script:lockHoldSeconds)) will auto-release the lock"
         }
-        Stop-Process -Id $holder.Id -Force -ErrorAction Stop
-        try { $holder.WaitForExit(5000) | Out-Null } catch { }
-        Add-Step "crm_links lock released: lock-holder process $($holder.Id) stopped; bounded pg_sleep($($script:lockHoldSeconds)) auto-release remains as backstop if the session lingers"
-    } catch {
-        Add-Step "crm_links lock released: stopping lock-holder process $($holder.Id) failed ($($_.Exception.Message)); bounded pg_sleep($($script:lockHoldSeconds)) will auto-release the lock"
+    }
+    if ($RequireRelease) {
+        $released = $false
+        try {
+            $released = Confirm-CrmLinksLockReleased
+        } catch {
+            throw "crm_links lock could not be confirmed released after stopping the lock-holder ($($_.Exception.Message)); worker NOT restarted against a held lock"
+        }
+        if (-not $released) {
+            throw "crm_links lock could not be confirmed released after stopping the lock-holder and terminating the holding backend(s); worker NOT restarted against a held lock"
+        }
+    } elseif ($hadHolder) {
+        try {
+            $released = Confirm-CrmLinksLockReleased
+            if (-not $released) {
+                Add-Step "crm_links lock release not confirmed in finally path (non-gating); bounded pg_sleep($($script:lockHoldSeconds)) will auto-release the lock"
+            }
+        } catch {
+            Add-Step "crm_links lock release check failed in finally path (non-gating, swallowed): $($_.Exception.Message)"
+        }
     }
 }
 
@@ -381,7 +434,7 @@ try {
     Add-Step "killing worker service (docker compose kill worker)..."
     if ((Invoke-Compose @("kill", "worker")) -ne 0) { throw "docker compose kill worker failed" }
     Add-Step "worker killed; stopping crm_links lock-holder before lease expiry and restart..."
-    Stop-CrmLinksLock
+    Stop-CrmLinksLock -RequireRelease
     Invoke-Compose @("ps", "worker", "--format", "{{.State}}") | Out-Null
     $workerState = ($script:lastComposeOutput | Out-String).Trim()
     $script:counts["worker_state_after_kill"] = $workerState
