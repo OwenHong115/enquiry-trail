@@ -78,7 +78,7 @@ part that is not asserted.
 | A19 | Ordinary notification idempotency | `backend/tests/integration/test_slack_notifications.py::test_a19_one_ready_one_notification_one_message_one_event`, `test_http_sim_a19_sends_exactly_one_message`, `test_a19_duplicate_idempotency_key_intake_sends_exactly_once`; unit: `backend/tests/unit/test_slack_notifications_unit.py` (11 tests), `backend/tests/unit/test_slack_channel_wiring.py` (3 tests). Slack files total 25 tests (11 integration + 14 unit). Last re-verified 2026-11-01 | `ab2e4f8` | Integration suite passed (273 passed, 2026-11-02, base e04ef02) and unit suite passed (167 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
 | A20 | Slack delivery unknown/failure | `backend/tests/integration/test_slack_notifications.py::test_a20_lost_success_is_delivery_unknown_no_resend`, `test_a20_definite_failure_records_failed`, `test_http_sim_a20_drop_success_is_unknown_one_message`, `test_http_sim_definite_auth_failure_is_failed`, `test_retryable_failure_uses_job_retry_then_succeeds`. Last re-verified 2026-11-01 | `ab2e4f8` | Integration suite passed (273 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
 | A21 | AI validation/fallback | `backend/tests/unit/test_extraction.py` (valid fields kept, invalid budget/evidence dropped to null); `backend/tests/integration/test_extraction.py::test_valid_extraction_persisted_with_snapshot`, `test_invalid_budget_and_evidence_dropped_to_null`, `test_extractor_failure_falls_back_and_still_prepares` | `eca2d0b` | Unit suite passed (167 passed, 2026-11-02, base e04ef02) and integration suite passed (273 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
-| A22 | Untrusted text | `frontend/tests/app.test.tsx` escaped-rendering cases; backend intake stores message as data (see `backend/tests/integration/test_api_intake.py`) (PARTIAL: no dedicated malicious-HTML end-to-end case was identified) | `3770890` | PARTIAL - frontend suite passed (17 passed) and integration suite passed (273 passed, 2026-11-02, base e04ef02); S8 reviewer basis is the escaped-rendering cases in `frontend/tests/app.test.tsx` plus intake storing the message as data; a dedicated malicious-HTML end-to-end injection case is still not asserted. Last re-verified 2026-11-01 | PENDING OPERATOR |
+| A22 | Untrusted text | `frontend/tests/app.test.tsx` escaped-rendering cases; backend intake stores message as data (see `backend/tests/integration/test_api_intake.py`); dedicated e2e injection case `e2e/core-ui.spec.ts` (`A22: untrusted enquiry text renders escaped with no external requests`, asserts escaped literal render, no injected script/img execution, zero non-local requests) | `3770890`, `e8d9253` | Frontend suite passed (17 passed), integration suite passed (273 passed), and Playwright 7 passed live at the `e04ef02` stack (2026-11-02, base e04ef02; dedicated A22 case included, see `docs/e2e-browser-evidence.md`); S8 reviewer basis is the escaped-rendering cases in `frontend/tests/app.test.tsx`, intake storing the message as data, plus the dedicated e2e injection case. Last re-verified 2026-11-02 | PENDING OPERATOR |
 | A23 | Independent versions | `backend/tests/integration/test_owner_drafts.py::test_draft_save_and_owner_change_do_not_conflict`, `test_owner_change_race_exactly_one_succeeds` | `b722df5` | Integration suite passed (273 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
 | A24 | Terminal task idempotency | `backend/tests/integration/test_s4_review_task.py::test_a24_complete_is_terminal_and_repeatable`, `test_a24_cancel_is_terminal_and_repeatable`; HTTP repeat/opposite-action cases in `backend/tests/integration/test_api_actions.py` | See git history for `test_s4_review_task.py` | Integration suite passed (273 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
 | A25 | Intake DB rollback | `backend/tests/integration/test_s2_intake.py::test_a25_failed_task_insert_leaves_no_partial_intake` (atomicity); API-level 503 mapping now implemented via `IntakeUnavailableError` in `backend/app/services/intake.py` (raised on database failure) and asserted by `backend/tests/integration/test_a25_intake_503.py::test_a25_database_failure_is_503_atomic_and_retryable`, `test_a25_non_database_error_still_returns_500` plus `backend/tests/unit/test_a25_intake_unavailable.py` (targeted run: 5 passed). Last re-verified 2026-11-01 | `7128f3d` | Integration suite passed (273 passed, 2026-11-02, base e04ef02) and unit suite passed (167 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
@@ -95,13 +95,17 @@ part that is not asserted.
 
 ## Coverage summary (automated evidence only, not acceptance)
 
-- Items with automated evidence: A01-A21, A23-A29, A31-A33
-  (A22 is excluded here; see Partial below), plus A28
+- Items with automated evidence: A01-A29, A31-A33
+  (including A22: frontend escaped-rendering cases, intake storing
+  the message as data, plus the dedicated e2e injection case in
+  `e2e/core-ui.spec.ts` asserting escaped literal render, no injected
+  script/img execution, and zero non-local requests), plus A28
   frontend evidence with Playwright live at the `e04ef02` stack
   (7 passed, see `docs/e2e-browser-evidence.md`). Counts behind this
   summary (real passed runs, 2026-11-02 at base `e04ef02`): backend unit
   167 passed, backend integration 273 passed, frontend 17 passed.
-- Partial: A22 (no dedicated injection case).
+- Partial: none for A22; A22 is evidenced as above (its verdict
+  remains PENDING OPERATOR; re-verified 2026-11-02).
 - No live-provider automated evidence: A30, C01, C02. C01/C02 are
   excluded by the hard boundary above (contract package outside this
   repo, operator-run only; DoD not met locally). A30 stays
