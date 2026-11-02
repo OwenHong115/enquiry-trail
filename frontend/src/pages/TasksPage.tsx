@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage, fieldError } from "../lib/api";
 import { usePolling } from "../lib/polling";
 import type { TaskList } from "../lib/types";
@@ -11,13 +11,18 @@ export default function TasksPage() {
   const [actionError, setActionError] = useState<unknown>(null);
   const [failedTaskId, setFailedTaskId] = useState<string | null>(null);
 
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     const params = new URLSearchParams({ limit: "25" });
     if (status) params.set("status", status);
     try {
-      setData(await api<TaskList>(`/api/v1/tasks?${params.toString()}`));
+      const result = await api<TaskList>(`/api/v1/tasks?${params.toString()}`);
+      if (seq !== loadSeq.current) return;
+      setData(result);
       setError(null);
-    } catch (err) { setError(errorMessage(err)); }
+    } catch (err) { if (seq === loadSeq.current) setError(errorMessage(err)); }
   }, [status]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount fetches remote data; setState happens after the await, restructuring would change behaviour
