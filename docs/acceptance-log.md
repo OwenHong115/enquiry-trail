@@ -36,8 +36,8 @@ their own decision, date, and signature outside the automated suites.
   (`timedelta imported but unused` at
   `backend/tests/integration/test_api_auth.py`) is fixed by that
   merge. GitHub CI evidence is recorded in Current status
-  (2026-11-02) below; H03 stays OPEN only for its remaining review
-  conditions (see `docs/checklist.md`).
+  (2026-11-02) below as a historical baseline for `8dafed9`;
+  the current branch gate is PENDING (see `docs/checklist.md`).
 - Frontend: `npm run test` in the main tree -> **3 test files passed,
   17 tests passed** (2026-11-02).
 - Playwright (A28): live run at the `e04ef02` stack -> **7 passed**
@@ -126,7 +126,7 @@ part that is not asserted.
 CI evidence reference (operator-supplied; no verdict changed by
 this section; every verdict above stays `PENDING OPERATOR`):
 
-GitHub CI evidence (operator-supplied, 2026-11-02): run [41403905282](https://github.com/OwenHong115/enquiry-trail/actions/runs/41403905282) on remote `main` at `8dafed9` succeeded in all four jobs: test (unit 167 passed; integration 273 passed, 1 warning), frontend (17 passed, build ok), lint (ruff and eslint ok), e2e (Playwright 7 passed). That run uploaded no artifacts. PRs #1-#8 are merged with no inline review threads; that is a statement of thread state, not a review approval. `main` branch protection: `protected=false`, no required status checks; a rulesets query returned a plan-limit 403, so ruleset state could not be confirmed. The CI sub-condition of H03 is therefore SATISFIED for `8dafed9`.
+Historical CI baseline (operator-supplied, 2026-11-02): run [41403905282](https://github.com/OwenHong115/enquiry-trail/actions/runs/41403905282) on remote `main` at `8dafed9` succeeded in all four jobs: test (unit 167 passed; integration 273 passed, 1 warning), frontend (17 passed, build ok), lint (ruff and eslint ok), e2e (Playwright 7 passed). That run uploaded no artifacts and proves `8dafed9` only; it does not satisfy the gate for any later branch. PRs #1-#8 are merged with no inline review threads; that is a statement of thread state, not a review approval. `main` branch protection: `protected=false`, no required status checks; a rulesets query returned a plan-limit 403, so ruleset state could not be confirmed. For the current branch `fix/round3-closeout`, PR/head CI is PENDING at the time of writing and must be recorded from its actual run.
 
 - The run above is CI evidence for `8dafed9` only. It uploaded no
   artifacts. It does not change any verdict in this log.
