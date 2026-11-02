@@ -26,15 +26,21 @@ docs/build-layout.md, CHANGELOG.md, plus APPLY-STATUS.txt).
 
 Steps, in order:
 
-1. Vendor or reference the supplied authority `openapi.yaml` at a
-   fixed path recorded in the repo; record its hash.
+1. Keep the supplied authority package OUTSIDE this repository,
+   read-only. It is never vendored or copied in. Reference it
+   through a configurable input path (for example a
+   `CONTRACT_OPENAPI` environment variable or a generator script
+   parameter), never a machine-specific absolute path as the only
+   entry; record the source hash in the generation output header.
 2. Pin the generator in the frontend lockfile
    (`frontend/package-lock.json`): add `openapi-typescript` as a
    devDependency at an exact version, installed with `npm ci`.
    No floating version, no global install.
-3. Generate: `npx openapi-typescript <authority openapi.yaml> -o frontend/src/lib/api-types.ts`.
-   The generated file is committed and carries a generated-file
-   header; it is never hand-edited.
+3. Generate in a temporary directory:
+   `npx openapi-typescript "$CONTRACT_OPENAPI" -o <tmp>/api-types.ts`,
+   then commit only the derived `frontend/src/lib/api-types.ts`
+   (a derived output the project rules explicitly allow). It
+   carries a generated-file header; it is never hand-edited.
 4. Reproducibility: regenerating from the same authority file with
    the pinned generator must produce a byte-identical output.
    A CI or local check regenerates and diffs; a non-empty diff
@@ -43,8 +49,10 @@ Steps, in order:
    do not exist in the API (form state, display helpers) remain in
    `frontend/src/lib/types.ts`, which then re-exports or wraps the
    generated API types instead of redeclaring them.
-6. Enum and vocabulary values come from the same authority source,
-   so C01-style consistency can be checked against them offline.
+6. Enum and vocabulary values come from the same authority source.
+   Executing the C01/C02 offline checks still needs the authority
+   package present at check time (see the separation note below);
+   generation alone does not close them.
 
 This keeps the authority direction D07 requires: the contract
 package is the source, code is derived from it.
@@ -71,13 +79,21 @@ authority contract. Generation stops being an independent check.
 Option A if the full authority package can be produced. It keeps
 D07's authority direction and makes generation a real check.
 
-Else Option B, only with an added enum-parity check: every enum
-and vocabulary value in the generated types is compared against
-the vocabularies in `contracts/verification.yaml` (the partial
-update package already in this repository), and a mismatch fails
-the check. That restores an independent source for the values most
-likely to drift, even though field shapes still derive from the
-runtime models.
+Else Option B as a standalone change to the frontend-type
+generation source. It carries the authority-direction risk above
+with no compensating independent check available in this
+repository today: the partial update package has no complete
+authority vocabulary definitions, so no enum-parity check against
+it can provide an independent guarantee, and none is proposed.
+
+## Separation: Option B approval is not C01/C02 closure
+
+Approving Option B changes only the D07 frontend-type generation
+source. C01 and C02 are separate offline contract checks: they
+still require the full authority vocabulary.yaml, openapi.yaml
+and contract fixtures, or a separately approved formal contract
+change. Approving Option B does NOT close C01 or C02, and this
+proposal must not be read as doing so.
 
 ## What this proposal does not do
 
