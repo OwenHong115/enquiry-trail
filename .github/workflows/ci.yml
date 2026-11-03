@@ -99,6 +99,25 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+  script-tests:
+    # The A26 recovery script targets Windows PowerShell 5.1; its
+    # harnesses fake docker/HTTP boundaries and never touch a real
+    # daemon, database, or stack. This job covers exactly that
+    # platform; it does not claim coverage of pwsh on Linux.
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Run the A26 worker-stop classification harness
+        shell: powershell
+        run: .\scripts\test_a26_worker_state.ps1
+
+      - name: Run the A26 recovery flow harness
+        shell: powershell
+        run: .\scripts\test_a26_recovery_flow.ps1
+
   frontend:
     runs-on: ubuntu-latest
 
