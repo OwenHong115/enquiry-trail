@@ -21,7 +21,7 @@ Push status, anchored to recorded facts only: remote `main` was `8dafed9` on 202
 | H04 | Contract checks C01 (enum copies consistent) and C02 (fixtures validate) pass | C01/C02 are OFFLINE contract checks. They are blocked on the missing full authority package; they are not live-provider evidence. Missing files: authority.md, openapi.yaml, vocabulary.yaml, generate_vocabulary.py, and the contract fixtures. The repository plan package is the partial update package (only PLAN.md, contracts/tdd.yaml, contracts/verification.yaml, docs/build-layout.md, CHANGELOG.md, plus APPLY-STATUS.txt noting the original EnquiryTrail-plan directory rename and the absent leadops parent; D:/Projects/Upwork-Projects/Project-Plans/leadops does not exist). `docs/acceptance-log.md` records C01/C02 as NO AUTOMATED EVIDENCE. | OPEN - closes when the full authority package is supplied, C01/C02 are run offline against it, and the outputs are recorded by the operator. |
 | H05 | This checklist (H01-H07) complete with evidence fields filled in | This file is on current `main`/docs state (see git log for `docs(checklist):` / `docs(acceptance):` commits), but H01-H04, H06, and H07 remain open, so the pack as a whole is not complete. | OPEN - closes only when every other row carries an inspected artefact and the operator accepts the pack. |
 | H06 | Stack starts from a clean volume following the README/AGENTS quick start; A30 real smoke recorded, or connected mode explicitly described as unverified | Connected half is satisfied as a statement: `docs/connected-handover.md` states connected mode is UNVERIFIED, M0 O01-O04 open, mock-labelled delivery. Clean-volume evidence exists: `docs/h06-clean-volume-evidence.md` records the 2026-11-02 run at `e04ef02` (fresh-volume `docker compose -p eqclean up -d --build` -> migrate+seed created exactly 1 operator, api healthy, web 200, login 200; then `down -v` and the main stack was restored). A30 was not run (no real account). | OPEN - the clean-volume evidence is recorded and complete; the closing condition is operator sign-off only. The completed clean-volume run is not to be re-run as a closing condition. |
-| H07 | UI mode matches actual configuration; any recording contains no secrets; branch pushed state known | UI/configuration match is supported by `docs/e2e-browser-evidence.md` (real stack, synthetic badge, throwaway environment values never committed). No recording was produced in this worktree. Push status, anchored to recorded facts only: remote `main` was `8dafed9` on 2026-11-02 (operator-supplied). Local commits after `8dafed9` are not claimed as pushed. | OPEN - closes when the operator confirms the UI mode against configuration, reviews any recording for secrets, and records the branch state. |
+| H07 | UI mode matches actual configuration; any recording contains no secrets; branch pushed state known | A full synthetic demo was executed and recorded on an isolated stack: `docs/demo-runbook.md` + `docs/demo-evidence.md` (2026-11-03, incl. a local Playwright video kept outside the repository). UI/configuration match is also supported by `docs/e2e-browser-evidence.md` (real stack, synthetic badge, throwaway environment values never committed). No recording was produced in this worktree. Push status, anchored to recorded facts only: remote `main` was `8dafed9` on 2026-11-02 (operator-supplied). Local commits after `8dafed9` are not claimed as pushed. | OPEN - closes when the operator confirms the UI mode against configuration, reviews any recording for secrets, and records the branch state. |
 
 ## Known open items (must stay open until closed by an artefact)
 
@@ -47,11 +47,13 @@ Push status, anchored to recorded facts only: remote `main` was `8dafed9` on 202
 Historical CI baseline (operator-supplied, 2026-11-02): run [41403905282](https://github.com/OwenHong115/enquiry-trail/actions/runs/41403905282) on remote `main` at `8dafed9` succeeded in all four jobs: test (unit 167 passed; integration 273 passed, 1 warning), frontend (17 passed, build ok), lint (ruff and eslint ok), e2e (Playwright 7 passed). That run uploaded no artifacts. PRs #1-#8 are merged with no inline review threads; that is a statement of thread state, not a review approval. `main` branch protection: `protected=false`, no required status checks; a rulesets query returned a plan-limit 403, so ruleset state could not be confirmed.
 
 - H03: the historical run above proves `8dafed9` only. For the
-  current branch `fix/round3-closeout`, PR #9 head `ff4ce1b`
-  CI run 41456429718 was observed green in all four jobs
-  (2026-11-02), and H03 stays OPEN until (1) review findings
-  are resolved and recorded and (2) contract changes are
-  reviewed and recorded.
+  the round-3 branch, PR #9 was operator-merged as `fe90285`
+  and the landed commit's run 41577712532 was observed green
+  in all five jobs (2026-11-03); the review findings behind
+  that PR are fixed and recorded. H03 stays OPEN only for the
+  operator's closure record, and D07/C01/C02 remain OPEN for
+  their own contract-input reasons (H04) - they are not hidden
+  by this status.
 - Branch protection on `main`: `protected=false`, no required
   status checks. A rulesets query returned a plan-limit 403, so
   ruleset state could not be confirmed. Recommended settings are in
