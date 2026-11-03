@@ -90,6 +90,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Capture the parameter before the state initialisation below:
+# unqualified $EnquiryId and $script:enquiryId are the same variable
+# at script top level, so initialising state would wipe the parameter.
+$script:suppliedEnquiryId = $EnquiryId
+
 $script:failures = @()
 $script:steps = @()
 $script:counts = [ordered]@{}
@@ -417,8 +422,8 @@ try {
     Start-CrmLinksLock
 
     # Resolve or create the enquiry in scope before touching the worker.
-    if ($EnquiryId) {
-        $script:enquiryId = Assert-Guid $EnquiryId "enquiry id"
+    if ($script:suppliedEnquiryId) {
+        $script:enquiryId = Assert-Guid $script:suppliedEnquiryId "enquiry id"
         Add-Step "enquiry_id = $($script:enquiryId) (supplied)"
     } else {
         try {
@@ -485,6 +490,13 @@ try {
     Add-Step "worker state after kill = $workerStateRaw (docker inspect exit $inspectExitCode)"
     $workerStopped = Resolve-WorkerStopVerdict -ExitCode $inspectExitCode -RawState $workerStateRaw
     Check "worker_stopped_after_kill" $workerStopped "stopped"
+    if ($workerStopped -ne "stopped") {
+        # Safety precondition for everything below: never expire the
+        # target lease or restart the worker while the original
+        # worker might still be running. "Could not inspect" is not
+        # "stopped". The finally path still releases the lock.
+        throw "worker stop could not be confirmed (verdict=$workerStopped, docker inspect exit $inspectExitCode, state='$workerStateRaw'); aborting before lease expiry and worker restart - no target lease was modified"
+    }
 
     # Expire only this enquiry's orphaned lease (same scoped job set as
     # the barrier), so the restarted worker can reclaim it at once
