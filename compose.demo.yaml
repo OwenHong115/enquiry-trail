@@ -1,0 +1,59 @@
+# Demo-only Compose override: run an isolated synthetic demo stack
+# next to the working stack without host-port collisions, and pin
+# every external boundary to the local simulator.
+#
+# Usage (from the repository root, main stack may stay up):
+#   docker compose -p eqdemo -f compose.yaml -f compose.demo.yaml up -d --build
+#   docker compose -p eqdemo -f compose.yaml -f compose.demo.yaml down -v
+#
+# Host ports: API 127.0.0.1:18080, UI 127.0.0.1:15173. The demo
+# database publishes no host port. The `!override` tags replace the
+# base file's port lists instead of merging with them.
+#
+# Local-boundary pinning: whatever CRM_*/SLACK_*/EXTRACTOR_* values
+# the shell or env file carries, the demo api/worker/simulator are
+# pinned below to the in-network simulator with a demo-only token,
+# Slack disabled, and the local fixture extractor. SESSION_SECRET
+# and SEED_OPERATOR_PASSWORD stay required (no defaults added).
+#
+# Verify without dumping the full rendered config (it contains
+# secrets): use the filtered PowerShell check in
+# docs/demo-runbook.md, which prints only ports and booleans.
+services:
+  db:
+    ports: !override []
+
+  provider-sim:
+    environment:
+      # Demo-only simulator credential; never inherits CRM_TOKEN.
+      SIM_TOKEN: demo-sim-token
+
+  api:
+    ports: !override
+      - "127.0.0.1:18080:8080"
+    environment:
+      APP_BASE_URL: http://127.0.0.1:18080
+      ALLOWED_ORIGINS: http://127.0.0.1:15173
+      CRM_MODE: mock
+      CRM_BASE_URL: http://provider-sim:8091
+      CRM_TOKEN: demo-sim-token
+      SLACK_MODE: disabled
+      SLACK_BASE_URL: ""
+      SLACK_TOKEN: ""
+      SLACK_CHANNEL: ""
+
+  worker:
+    ports: !override []
+    environment:
+      CRM_MODE: mock
+      CRM_BASE_URL: http://provider-sim:8091
+      CRM_TOKEN: demo-sim-token
+      SLACK_MODE: disabled
+      SLACK_BASE_URL: ""
+      SLACK_TOKEN: ""
+      SLACK_CHANNEL: ""
+      EXTRACTOR_MODE: fixture
+
+  web:
+    ports: !override
+      - "127.0.0.1:15173:80"

@@ -5,6 +5,9 @@ const baseURL = process.env.E2E_BASE_URL ?? "http://127.0.0.1:5173";
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.ts",
+  // The demo recording spec belongs only to demo.config.ts; the CI
+  // suite must never collect it.
+  testIgnore: "**/demo.spec.ts",
   timeout: 120_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
