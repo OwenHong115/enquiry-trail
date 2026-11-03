@@ -27,10 +27,21 @@ does not change host ports. Verify the rendered ports before
 starting (inspect only the `ports` fields; the full rendered
 config contains secrets):
 
+Never print the full rendered config: it contains secrets. Use
+this filtered check instead (exit code checked, only ports and
+booleans printed, credential agreement reported as true/false):
+
 ```powershell
-docker compose -p eqdemo -f compose.yaml -f compose.demo.yaml config --format json
-# services.api.ports must be only 127.0.0.1:18080, services.web.ports
-# only 127.0.0.1:15173, services.db must publish nothing
+$raw = docker compose -p eqdemo -f compose.yaml -f compose.demo.yaml config --format json
+if ($LASTEXITCODE -ne 0) { throw "compose config failed" }
+$cfg = $raw | ConvertFrom-Json
+"api ports: $($cfg.services.api.ports.published -join ',')"
+"web ports: $($cfg.services.web.ports.published -join ',')"
+"db published: $([bool]$cfg.services.db.ports)"
+"api crm local: $($cfg.services.api.environment.CRM_BASE_URL -eq 'http://provider-sim:8091')"
+"worker crm local: $($cfg.services.worker.environment.CRM_BASE_URL -eq 'http://provider-sim:8091')"
+"slack disabled: $($cfg.services.api.environment.SLACK_MODE -eq 'disabled')"
+"sim/api token match: $($cfg.services.'provider-sim'.environment.SIM_TOKEN -eq $cfg.services.api.environment.CRM_TOKEN)"
 docker compose -p eqdemo -f compose.yaml -f compose.demo.yaml up -d --build
 curl.exe http://127.0.0.1:18080/api/v1/health/live
 # open http://127.0.0.1:15173 and sign in as demo-operator

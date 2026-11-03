@@ -109,3 +109,25 @@ stack verified healthy before and after), app code `fe90285`:
   operators should open the same file the same way.
 - This is an agent content check, not the operator's H07
   sign-off; H07 stays OPEN.
+
+## Addendum: isolation fixes (2026-11-02)
+
+- Rendered-config negative checks (shell placeholders and an
+  isolated env file carrying https://crm.example.invalid,
+  https://notify.example.invalid and fictitious tokens): after the
+  compose.demo.yaml pinning, api/worker render CRM mock at
+  http://provider-sim:8091, Slack disabled with empty URL/token,
+  SIM_TOKEN equals the demo adapter token (boolean check only),
+  ports 18080/15173 only, db unpublished, no placeholder value in
+  the rendered output. Before the fix the same placeholders were
+  inherited by api/worker (CRM http at the external URL, Slack
+  http at the external URL).
+- Playwright collection: before, the normal config listed 8 tests
+  including demo.spec.ts (as CI run 41585673556 executed); after
+  adding testIgnore for demo.spec.ts the normal config lists
+  exactly the original 7 core-ui tests and demo.config.ts lists
+  exactly the 1 recording test.
+- Minimal smoke on the pinned config: demo API live ok, UI 200,
+  synthetic intake 202 ENQ-000001, enquiry reached crm status
+  synced with a sim-* remote id, main stack healthy before and
+  after; the eqdemo project and volume were removed.
