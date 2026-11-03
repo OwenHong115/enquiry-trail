@@ -70,13 +70,42 @@ produced, would in any case predate the v3.0/v3.0.1 plan and
 could not be promoted to current authority without the
 superseding v3.0.1 files.
 
-Single outstanding input request (no repository change can
-substitute for it): supply the current v3.0.1 (or later) full
-authority contract package, read-only and outside this
-repository, at a configurable path, containing at least
-`authority.md`, `contracts/openapi.yaml`,
-`contracts/vocabulary.yaml`, `generate_vocabulary.py`, and the
-contract `fixtures/*.json` including the six `detail_*` state
-fixtures. Until then D07 generation and the C01/C02 offline
-checks remain blocked and OPEN; Option B is not implemented
-(no approval) and would not close C01/C02 in any case.
+The single outstanding contract-input request lives in
+`docs/acceptance-log.md` (C01/C02 rows); it is not duplicated
+here. Until that input exists, D07 generation and the C01/C02
+offline checks remain blocked and OPEN; Option B is not
+implemented (no approval) and would not close C01/C02 in any
+case.
+
+## Recording delivery (2026-11-03)
+
+The first demo recording (`page@5f20ad555aee67d6018ed749f78e1a7c.webm`,
+845,599 bytes) was produced by an ad-hoc script and kept only in
+a local temp directory; it is superseded as the deliverable by
+the recording below and is not referenced as a delivered file.
+
+Delivered recording, produced with the committed entry
+(`e2e/demo.config.ts` + `e2e/demo.spec.ts`, video always kept)
+against the `eqdemo` override stack (API 18080, UI 15173, main
+stack verified healthy before and after), app code `fe90285`:
+
+- File: `D:\Projects\Upwork-Projects\Project-Plans\EnquiryTrail\deliverables\demo\enquirytrail-demo-ui.webm`
+  (outside the repository; not committed to Git).
+- SHA-256: `2CAA2B6EF210D0EFBA175B5CAB1DCF975660979AAF4C7D9EBED87B9599ABEDED`
+- Size: 362,622 bytes. Duration: 7 seconds. Resolution: 800x450.
+- Covers: the UI flow only - sign in, synthetic quote, synced
+  detail, follow-up completion, completed state after reload.
+  Scenarios 1-3 above are API/simulator evidence and are not in
+  this video; nothing here is a four-scenario recording.
+- Playback was verified by actually opening the file in a
+  desktop Chrome and inspecting frames at the start, middle,
+  and end: quote form with synthetic data, detail page
+  `ready (attention: none)` / CRM `synced`, and the completed
+  follow-up under the Completed filter after reload. No
+  password, `SESSION_SECRET`, or token is visible (sign-in
+  typing is not shown; only synthetic data appears). The
+  Playwright-bundled headless Chromium could not decode the
+  WebM for this check, so verification used desktop Chrome;
+  operators should open the same file the same way.
+- This is an agent content check, not the operator's H07
+  sign-off; H07 stays OPEN.
