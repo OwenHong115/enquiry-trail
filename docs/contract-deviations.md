@@ -176,6 +176,18 @@ shapes are strict subsets of the existing detail/task public fields:
   (app/security/proxy.py) exists for the P3b rate-limit slice; no rate
   limiting is implemented here, and signed webhooks remain P3c.
 
+## Classification of existing items (2026-11-02)
+
+Classification only; the substance of the entries below is unchanged.
+
+| Item | Classification | What remains |
+|---|---|---|
+| Intake timing (intake creates routing, owner and the initial follow-up task atomically; the unprepared detail already contains owner/task) | authorized divergence recorded for contract revision | Reconcile intake/preparation timing with the planned contract revision (v3.1 follow-up below); operator records any acceptance verdict. |
+| Claim-budget closure (budget counts every claim; exhaustion is decided only by claim_next; the next claim closes without a fifth attempt or a provider call) | authorized divergence recorded for contract revision | Reconcile the cycle-closure observation point with v3.1; keep the schema ceiling. |
+| CSRF HMAC design (CSRF tokens are HMAC-SHA256(SESSION_SECRET, raw session token), stored only as hashes; rotating SESSION_SECRET invalidates live CSRF tokens) | internal implementation choice | Nothing contract-side; the design is local to the session implementation in backend/app/security/. |
+| P2 list/timeline shapes (enquiry/task list items, keyset cursors, event timeline shape in the P2 and A33 sections) | pending authority reconciliation | No complete external list schema exists in this repository; reconcile against the full authority package when it is supplied (missing: authority.md, openapi.yaml, vocabulary.yaml, generate_vocabulary.py, contract fixtures). |
+| A32 policy (contact-version coordination: field-merge, patch, readback-first and dedup decisions, 2026-10-26) | pending authority reconciliation | Recorded as a local decision only; A32 acceptance remains the operator's record in docs/acceptance-log.md (PENDING OPERATOR) and the policy is reconciled when the authority package is available. |
+
 ## Delivery boundaries (not implemented features)
 
 - Adapter and simulator exist (P1a); the persistent worker loop,

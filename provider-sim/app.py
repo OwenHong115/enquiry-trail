@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 TOKEN = os.environ.get("SIM_TOKEN", "sim-token")
 _lock = threading.Lock()
@@ -130,6 +130,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/__test__/counts":
             with _lock:
                 self._send(200, {"counts": dict(_counts), "contacts": len(_contacts)})
+            return
+        if path == "/__test__/contacts":
+            email = parse_qs(urlparse(self.path).query).get("email", [None])[0]
+            if not email:
+                self._send(422, {"error": "validation_failed"})
+                return
+            with _lock:
+                matching = [dict(c) for c in _contacts.values() if c.get("email") == email]
+            self._send(200, {"contacts": matching, "count": len(matching)})
             return
         if path in ("/health", "/probe"):
             with _lock:

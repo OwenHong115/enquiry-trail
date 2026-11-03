@@ -12,10 +12,9 @@ their own decision, date, and signature outside the automated suites.
 - Worktree: `.worktrees/wt29` on branch `docs/audit2-truth-closeout`.
   Code measured at base `e04ef02` on 2026-11-02. Push status, anchored
   to recorded facts only: on 2026-11-01 `main` was pushed at `24d4aab`
-  (`origin/main` == `24d4aab` then). This round's merges (A25 narrow,
-  CI origin, perf gate, PW UI, extraction/A27, A26
-  script+lock+stderr+release, tasks stale-load) are local on top and
-  will be pushed after final review. No current-tip count is claimed.
+  (`origin/main` == `24d4aab` then). Updated 2026-11-02: remote
+  `main` was `8dafed9` (operator-supplied). Local commits after
+  `8dafed9` are not claimed as pushed.
 - Backend unit: interpreter `backend/.venv/Scripts/python.exe`
   (main-tree venv) with `-m pytest tests/unit -q` ->
   **167 passed** in 9.97s (2026-11-02, code at base `e04ef02`).
@@ -36,8 +35,9 @@ their own decision, date, and signature outside the automated suites.
   `No module named ruff`.) The earlier F401
   (`timedelta imported but unused` at
   `backend/tests/integration/test_api_auth.py`) is fixed by that
-  merge. H03 still OPEN only because no GitHub Actions run has been
-  observed (see `docs/checklist.md`).
+  merge. GitHub CI evidence is recorded in Current status
+  (2026-11-02) below as a historical baseline for `8dafed9`;
+  the current branch gate is PENDING (see `docs/checklist.md`).
 - Frontend: `npm run test` in the main tree -> **3 test files passed,
   17 tests passed** (2026-11-02).
 - Playwright (A28): live run at the `e04ef02` stack -> **7 passed**
@@ -90,8 +90,8 @@ part that is not asserted.
 | A31 | Fault matcher unavailable | `backend/tests/unit/test_fault_demo.py::test_director_unavailable_never_raises_and_reports_inconclusive`; `backend/tests/integration/test_fault_demo.py::test_director_unavailable_marks_inconclusive`, `test_scenario_lookup_failure_leaves_job_handled`, `test_matcher_consumes_once_and_replay_is_safe` | `567c43a` | Unit suite passed (167 passed, 2026-11-02, base e04ef02) and integration suite passed (273 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
 | A32 | Contact version coordination | `backend/tests/integration/test_a32_contact_version.py` (7 tests: contact/version update, rearm with older enquiry ready, unknown stays readback-first, mid-sync race, changed-data new enquiry with remote patch, unsupported patch does not advance link, finalization serialization) | `efdc07d` | Integration suite passed (273 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
 | A33 | Timeline cursor commit safety | `backend/tests/integration/test_a33_timeline.py::test_timeline_order_shape_and_audit_only_excluded`, `test_timeline_cursor_pagination_exactly_once`, `test_timeline_commit_safety_two_transactions` | See git history for `test_a33_timeline.py` | Integration suite passed (273 passed, 2026-11-02, base e04ef02) | PENDING OPERATOR |
-| C01 | Enum/vocabulary consistency | None in this repository. The contract package is outside this repository and is not vendored, by hard boundary; C01 cannot be verified inside this repo. Verification requires the operator to run the external contract package against the backend; the DoD is not met locally. Section ids cited only; no contract text copied. Last re-verified 2026-11-02 | None | NO AUTOMATED EVIDENCE (excluded by boundary; operator-run only) | PENDING OPERATOR |
-| C02 | Fixtures validate against schema | None in this repository. The contract package is outside this repository and is not vendored, by hard boundary; C02 cannot be verified inside this repo. Verification requires the operator to run the external contract package against the backend; the DoD is not met locally. The six detail-state shapes are covered behaviourally by API detail tests, but no fixture-validation run exists here. Last re-verified 2026-11-02 | None | NO AUTOMATED EVIDENCE (excluded by boundary; operator-run only) | PENDING OPERATOR |
+| C01 | Enum/vocabulary consistency | None in this repository. C01 is an OFFLINE contract check, not live-provider evidence. It is blocked on the missing full authority package. Missing files: authority.md, openapi.yaml, vocabulary.yaml, generate_vocabulary.py, and the contract fixtures. The repository plan package is the partial update package (only PLAN.md, contracts/tdd.yaml, contracts/verification.yaml, docs/build-layout.md, CHANGELOG.md, plus APPLY-STATUS.txt noting the original EnquiryTrail-plan directory rename and the absent leadops parent; D:/Projects/Upwork-Projects/Project-Plans/leadops does not exist). Section ids cited only; no contract text copied. Last re-verified 2026-11-02 | None | NO AUTOMATED EVIDENCE (offline contract check blocked on the missing full authority package) | PENDING OPERATOR |
+| C02 | Fixtures validate against schema | None in this repository. C02 is an OFFLINE contract check, not live-provider evidence. It is blocked on the missing full authority package. Missing files: authority.md, openapi.yaml, vocabulary.yaml, generate_vocabulary.py, and the contract fixtures. The repository plan package is the partial update package (only PLAN.md, contracts/tdd.yaml, contracts/verification.yaml, docs/build-layout.md, CHANGELOG.md, plus APPLY-STATUS.txt noting the original EnquiryTrail-plan directory rename and the absent leadops parent; D:/Projects/Upwork-Projects/Project-Plans/leadops does not exist). The six detail-state shapes are covered behaviourally by API detail tests, but no fixture-validation run exists here. Last re-verified 2026-11-02 | None | NO AUTOMATED EVIDENCE (offline contract check blocked on the missing full authority package) | PENDING OPERATOR |
 
 ## Coverage summary (automated evidence only, not acceptance)
 
@@ -106,11 +106,11 @@ part that is not asserted.
   167 passed, backend integration 273 passed, frontend 17 passed.
 - Partial: none for A22; A22 is evidenced as above (its verdict
   remains PENDING OPERATOR; re-verified 2026-11-02).
-- No live-provider automated evidence: A30, C01, C02. C01/C02 are
-  excluded by the hard boundary above (contract package outside this
-  repo, operator-run only; DoD not met locally). A30 stays
+- No live-provider automated evidence: A30 only. A30 stays
   unverified: M0 O01-O04 have no operator evidence (see
-  `docs/connected-handover.md`).
+  `docs/connected-handover.md`). C01/C02 are OFFLINE contract checks
+  blocked on the missing full authority package; they are not
+  live-provider evidence.
 - Performance: `docs/perf-evidence.md` records a LOCAL SAMPLE ONLY
   (latest run at `2ec5927`: warmup 10, N=100, concurrency 5, errors 0;
   intake p50=41.9 p95=84.2 max=100.3 ms, time-to-ready p50=553.1
@@ -120,3 +120,17 @@ part that is not asserted.
   Last re-verified 2026-11-02.
 - Every verdict above is `PENDING OPERATOR`. No item is signed,
   dated, or accepted on the operator's behalf in this file.
+
+## Current status (2026-11-02)
+
+CI evidence reference (operator-supplied; no verdict changed by
+this section; every verdict above stays `PENDING OPERATOR`):
+
+Historical CI baseline (operator-supplied, 2026-11-02): run [41403905282](https://github.com/OwenHong115/enquiry-trail/actions/runs/41403905282) on remote `main` at `8dafed9` succeeded in all four jobs: test (unit 167 passed; integration 273 passed, 1 warning), frontend (17 passed, build ok), lint (ruff and eslint ok), e2e (Playwright 7 passed). That run uploaded no artifacts and proves `8dafed9` only; it does not satisfy the gate for any later branch. PRs #1-#8 are merged with no inline review threads; that is a statement of thread state, not a review approval. `main` branch protection: `protected=false`, no required status checks; a rulesets query returned a plan-limit 403, so ruleset state could not be confirmed. For the current branch `fix/round3-closeout`, PR #9 head `ff4ce1b` CI run 41456429718 succeeded in all four jobs (observed 2026-11-02); docs-only follow-up commits are covered by their own PR runs.
+
+- The run above is CI evidence for `8dafed9` only. It uploaded no
+  artifacts. It does not change any verdict in this log.
+- PRs #1-#8 merged, with no inline review threads. That is a
+  statement of thread state, not a review approval.
+- `main` branch protection: `protected=false`, no required status
+  checks; a rulesets query returned a plan-limit 403.

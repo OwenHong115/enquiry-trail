@@ -4,22 +4,79 @@ This document is the operator handover for the mock-labelled delivery.
 It describes how to start, inspect, and recover the shipped stack, which
 runs against the local provider simulator. It is not connected evidence.
 
-## Connected mode is UNVERIFIED (mock-labelled delivery)
+## Connected capability classification (mock-labelled delivery)
 
-Connected mode is **UNVERIFIED** in this delivery. Everything in this
-repository was built and verified against the local provider simulator
-(`provider-sim/`) and test doubles. No live HubSpot account and no live
-LLM were called. Simulator results must never be presented as connected
-evidence, and no acceptance item is signed off here.
+Connected capability is classified four ways in this delivery. No
+live HubSpot account and no live LLM were called. Simulator results
+must never be presented as connected evidence, and no acceptance item
+is signed off here.
+
+| Classification | Capability |
+|---|---|
+| Implemented and verified | Mock CRM adapter against the provider simulator (`provider-sim/`); fixture and template extraction (`FixtureExtractor`, `TemplateExtractor`). Verified by the unit and integration suites against the simulator and test doubles. |
+| Implemented but unverified | HTTP CRM adapter (`HttpCrmAdapter` in `backend/app/adapters/crm_http.py`) wire behaviour against a real provider. The adapter implements the local wire contract in `docs/crm-http-contract.md`; it has not been run against a real provider in this delivery, so no external provider conformance is claimed. |
+| Not implemented | Live extractor for connected mode (`_resolve_extractor` in `backend/app/worker/runner.py` raises `RuntimeError` for connected mode; no live extractor exists in this build); real provider conformance (no real provider was exercised, so conformance to any real provider's behaviour is not implemented or verified). |
+| Excluded by scope | Real HubSpot and real LLM calls in this delivery. They are out of scope for this mock-labelled delivery and were never made. |
 
 The live suite in `backend/tests/live/` is opt-in only (`--run-live` or
 `RUN_LIVE=1`). Without its prerequisites it fails loudly, naming each
 missing item; it never skips. With prerequisites present it would
 exercise create, read, optional patch, and a repeat create against the
-configured endpoint through the real `HttpCrmAdapter`, and verify that
-the returned remote id matches the read-back contact (the value a sync
-stores on the crm link). That happy path has not been run in this
-delivery because no real credentials are available.
+configured endpoint by calling the real `HttpCrmAdapter` directly.
+That is adapter-level wire smoke only; it does not verify intake,
+worker sync, or persisted `crm_links`, and it is not A30 evidence: it
+only compares a local variable holding the returned remote id across
+adapter calls. That happy path has not been run in this delivery
+because no real credentials are available.
+
+### A30 follow-up runbook (operator, real provider)
+
+A30 (live provider smoke) stays **PENDING OPERATOR**. The adapter-level
+live smoke above does not close it. An operator with a dedicated real
+test account closes A30 only by running the full flow below and keeping
+the evidence outside this repository:
+
+1. Submit an enquiry through the real intake API (the public intake
+   endpoint of a stack configured with `CRM_MODE=http`, a real
+   `CRM_BASE_URL` and `CRM_TOKEN`, and a live extractor configuration
+   once one exists), using a fresh email on the dedicated test account.
+   Record the enquiry id and the submitted email.
+2. Run an independent worker process configured with the real provider
+   adapter (`HttpCrmAdapter` against the real provider, not the
+   simulator) and let it claim and sync the enquiry. Record the worker
+   logs (`job.handled`, `crm.synced`) for that enquiry.
+3. Verify the persisted link: read the local `crm_links.remote_id` for
+   the enquiry's contact and compare it with the real remote contact id
+   returned by a read-by-email against the real provider. The two must
+   be equal, and exactly one local link must exist for the contact.
+4. Submit a repeat enquiry for the same contact (same email) through
+   the real intake API and let the worker sync it. Verify identity
+   reuse: the repeat sync resolves to the same `crm_links.remote_id`,
+   no second local link is created, and a read-by-email against the
+   real provider shows exactly one remote contact for that email (no
+   duplicate remote contact).
+5. Run the M0-gated checks below on the dedicated account: the
+   lost-response exercise (visibility after a lost write) and the
+   patch-preservation exercise (patch with empty-field preservation),
+   each with the evidence listed in the M0 table. A30 is not closed
+   while any M0 row it depends on lacks live evidence.
+
+Record each step's timestamps, remote ids, and provider-side records
+with the operator's evidence; do not commit real endpoints, tokens, or
+remote data to this repository.
+
+### Mock-only exception
+
+This mock-labelled delivery carries a mock-only exception for connected
+acceptance: connected (live-provider) acceptance for this delivery may
+be evidenced against the provider simulator and the mock CRM path
+instead of a real provider, because no real account is in scope.
+
+The exception exempts only that: connected acceptance evidence for
+this mock delivery. It does **not** exempt C01 or C02, and it does not
+exempt any other delivery gate (including the CI merge gate, the
+M0 checks above for any future connected claim, or operator sign-off
+of acceptance verdicts, which stay PENDING OPERATOR).
 
 ### Open M0 checks
 
@@ -33,8 +90,9 @@ close it; none is closed by simulator or fixture results.
 | Patch with empty-field preservation | A patch fills only confirmed-empty remote fields and preserves every non-empty remote field the local record does not own. | A live patch exercise on the dedicated account with before/after remote field values, showing preserved fields unchanged and no raw values in events (event payloads stay masked). |
 | LLM output interface | The connected extractor's real output shape, model identifier, and failure behaviour match the `ExtractorPort` contract the fixture and template adapters implement. | A live extraction exercise with the real model: request/response shape, validated budget/timeframe/evidence handling, parameter snapshot, and proof that a failure leaves the original enquiry and task untouched and never falls back to fixture data. |
 
-Until those rows have live evidence, treat every "connected" statement
-about this system as unverified, including this document's live-suite
+Until those rows have live evidence, treat every implemented-but-
+unverified or not-implemented "connected" statement about this system
+per the classification above, including this document's live-suite
 description (it describes code structure, not a run).
 
 ## Starting the stack from a clean volume

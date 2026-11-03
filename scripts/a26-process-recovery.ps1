@@ -10,6 +10,13 @@
 # drain, then counts persisted rows for that enquiry/contact only and
 # prints PASS/FAIL (exit code is non-zero on any mismatch).
 #
+# Stage proved by this script: the kill lands while the claimed job
+# (its kind is recorded in the record) is at the prepare stage,
+# blocked on crm_links before any remote write. This record does
+# not claim a post-remote-write crash; the prepare-stage kill is
+# what this record proves; remote-write crash recovery is A14's
+# evidence.
+#
 # Header note on evidence: simulator counts are NOT connected evidence.
 # The provider-sim counters only describe the local simulator process;
 # they do not prove anything about a real CRM provider. Persisted
@@ -83,6 +90,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Capture the parameter before the state initialisation below:
+# unqualified $EnquiryId and $script:enquiryId are the same variable
+# at script top level, so initialising state would wipe the parameter.
+$script:suppliedEnquiryId = $EnquiryId
+
 $script:failures = @()
 $script:steps = @()
 $script:counts = [ordered]@{}
@@ -115,6 +127,25 @@ function Invoke-Compose([string[]]$ComposeArgs) {
     } finally {
         $ErrorActionPreference = $previousPreference
     }
+}
+
+function Resolve-WorkerStopVerdict {
+    # Pure verdict for the post-kill worker state. Only an inspected
+    # 'exited' or 'dead' state with exit code 0 is stopped. A failed
+    # query is container-missing, an empty query is failed:empty-state,
+    # an unknown value is failed:unparseable-state:<value>, and a live
+    # state is not-stopped:<state>. Empty output never passes.
+    param(
+        [int]$ExitCode,
+        [AllowNull()][AllowEmptyString()][string]$RawState
+    )
+    if ($ExitCode -ne 0) { return "container-missing" }
+    if ($null -eq $RawState) { return "failed:empty-state" }
+    $state = $RawState.Trim().ToLowerInvariant()
+    if (-not $state) { return "failed:empty-state" }
+    if ($state -eq "exited" -or $state -eq "dead") { return "stopped" }
+    if ($state -in @("running", "restarting", "paused", "created")) { return "not-stopped:$state" }
+    return "failed:unparseable-state:$state"
 }
 
 function Get-ConfigValue([string]$Name) {
@@ -358,6 +389,7 @@ function Write-RecoveryRecord([string]$Verdict) {
         "- Enquiry ID: $($script:enquiryId)",
         "- Contact ID: $($script:contactId)",
         "- Claimed job (id|kind) observed before kill: $($script:claimedJob)",
+        "- In-flight stage proved: prepare-stage kill before any remote write (claimed job kind above); not a post-remote-write crash - remote-write crash recovery is A14's evidence.",
         "- Verdict: $Verdict",
         "",
         "## Steps",
@@ -390,8 +422,8 @@ try {
     Start-CrmLinksLock
 
     # Resolve or create the enquiry in scope before touching the worker.
-    if ($EnquiryId) {
-        $script:enquiryId = Assert-Guid $EnquiryId "enquiry id"
+    if ($script:suppliedEnquiryId) {
+        $script:enquiryId = Assert-Guid $script:suppliedEnquiryId "enquiry id"
         Add-Step "enquiry_id = $($script:enquiryId) (supplied)"
     } else {
         try {
@@ -431,14 +463,40 @@ try {
     $script:counts["claimed_job_before_kill"] = $script:claimedJob
     Add-Step "claim barrier passed: claimed job (id|kind) = $($script:claimedJob)"
 
+    Add-Step "recording worker container id before kill (docker compose ps -a -q worker)..."
+    $psBeforeKillExit = Invoke-Compose @("ps", "-a", "-q", "worker")
+    if ($psBeforeKillExit -ne 0) { throw "docker compose ps -a -q worker failed before kill (exit $psBeforeKillExit); worker was NOT killed; crm_links lock was released" }
+    $workerIdLines = @($script:lastComposeOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    if ($workerIdLines.Count -ne 1 -or $workerIdLines[0] -notmatch '^[0-9a-fA-F]{12,64}$') { throw "docker compose ps -a -q worker returned unparseable output before kill (lines=$($workerIdLines.Count)); worker was NOT killed; crm_links lock was released" }
+    $workerContainerIdBeforeKill = $workerIdLines[0]
+    $script:counts["worker_container_id_before_kill"] = $workerContainerIdBeforeKill
+    Add-Step "worker_container_id_before_kill = $workerContainerIdBeforeKill"
     Add-Step "killing worker service (docker compose kill worker)..."
     if ((Invoke-Compose @("kill", "worker")) -ne 0) { throw "docker compose kill worker failed" }
     Add-Step "worker killed; stopping crm_links lock-holder before lease expiry and restart..."
     Stop-CrmLinksLock -RequireRelease
-    Invoke-Compose @("ps", "worker", "--format", "{{.State}}") | Out-Null
-    $workerState = ($script:lastComposeOutput | Out-String).Trim()
-    $script:counts["worker_state_after_kill"] = $workerState
-    Add-Step "worker state after kill = $workerState"
+    Add-Step "inspecting worker container $workerContainerIdBeforeKill after kill (docker inspect)..."
+    $previousInspectPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $inspectOutput = docker inspect --format '{{.State.Status}}' $workerContainerIdBeforeKill 2>&1
+        $inspectExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousInspectPreference
+    }
+    $inspectLines = @($inspectOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    $workerStateRaw = if ($inspectLines.Count -eq 1) { $inspectLines[0] } elseif ($inspectLines.Count -eq 0) { "" } else { $inspectLines -join "`n" }
+    $script:counts["worker_state_after_kill"] = $workerStateRaw
+    Add-Step "worker state after kill = $workerStateRaw (docker inspect exit $inspectExitCode)"
+    $workerStopped = Resolve-WorkerStopVerdict -ExitCode $inspectExitCode -RawState $workerStateRaw
+    Check "worker_stopped_after_kill" $workerStopped "stopped"
+    if ($workerStopped -ne "stopped") {
+        # Safety precondition for everything below: never expire the
+        # target lease or restart the worker while the original
+        # worker might still be running. "Could not inspect" is not
+        # "stopped". The finally path still releases the lock.
+        throw "worker stop could not be confirmed (verdict=$workerStopped, docker inspect exit $inspectExitCode, state='$workerStateRaw'); aborting before lease expiry and worker restart - no target lease was modified"
+    }
 
     # Expire only this enquiry's orphaned lease (same scoped job set as
     # the barrier), so the restarted worker can reclaim it at once
@@ -469,6 +527,28 @@ try {
     Check "notifications_for_enquiry" (Invoke-PsqlScalar "SELECT count(*) FROM leadops.notifications WHERE enquiry_id = '$($script:enquiryId)'") 0
     foreach ($eventType in @("enquiry.received", "enquiry.prepared", "crm.synced")) {
         Check "event_$eventType" (Invoke-PsqlScalar "SELECT count(*) FROM leadops.activity_events WHERE enquiry_id = '$($script:enquiryId)' AND event_type = '$eventType'") 1
+    }
+
+    # Remote uniqueness for this target only (not global sim counts):
+    # exactly one remote contact with the target contact's email, and
+    # its id must equal this contact's crm_links.remote_id.
+    try {
+        $targetEmail = Invoke-PsqlScalar "SELECT leadops.contacts.email_norm FROM leadops.enquiries JOIN leadops.contacts ON leadops.contacts.id = leadops.enquiries.contact_id WHERE leadops.enquiries.id = '$($script:enquiryId)'"
+        if (-not $targetEmail) { throw "target contact email not found for enquiry $($script:enquiryId)" }
+        $linkedRemoteId = Invoke-PsqlScalar "SELECT remote_id FROM leadops.crm_links WHERE contact_id = '$($script:contactId)'"
+        if (-not $linkedRemoteId) { throw "crm_links.remote_id not found for contact $($script:contactId)" }
+        $encodedEmail = [Uri]::EscapeDataString($targetEmail.Trim())
+        $simContactsRaw = docker compose exec -T provider-sim python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8091/__test__/contacts?email=$encodedEmail').read().decode())"
+        if ($LASTEXITCODE -ne 0) { throw "provider-sim contacts query failed (exit $LASTEXITCODE)" }
+        $simContacts = (($simContactsRaw | Out-String).Trim() | ConvertFrom-Json)
+        $remoteContacts = @($simContacts.contacts)
+        Check "remote_contacts_for_target_email" $remoteContacts.Count 1
+        $remoteIdMatches = ($remoteContacts.Count -eq 1 -and [string]$remoteContacts[0].id -eq $linkedRemoteId.Trim())
+        Check "remote_id_matches_link" $remoteIdMatches $true
+    } catch {
+        Add-Step "remote uniqueness check failed: $($_.Exception.Message)"
+        Check "remote_contacts_for_target_email" "unavailable" 1
+        Check "remote_id_matches_link" $false $true
     }
 
     # Simulator counts are reported for local diagnosis only (see header):

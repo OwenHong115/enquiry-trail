@@ -1,10 +1,13 @@
-"""Live CRM smoke tests (opt-in only; see conftest.py for the gate).
+"""Adapter-level live CRM wire smoke tests (opt-in only).
 
-These tests use the real HttpCrmAdapter against the configured real
-endpoint. They are never mocked and never run against the simulator as
-connected evidence. In this mock-labelled delivery only the
-loud-failure path (missing prerequisites) is executed; the happy path
-below runs only when an operator supplies a dedicated test account.
+These tests use the real HttpCrmAdapter directly against the
+configured real endpoint. This is adapter-level wire smoke only; it
+does not verify intake, worker sync, or persisted crm_links; it is
+not A30 evidence. They are never mocked and never run against the
+simulator as connected evidence. In this mock-labelled delivery only
+the loud-failure path (missing prerequisites) is executed; the happy
+path below runs only when an operator supplies a dedicated test
+account.
 
 Connected mode is UNVERIFIED: passing or failing here is recorded by
 the operator outside this suite, never as an acceptance sign-off.
@@ -38,17 +41,18 @@ def _context() -> CallContext:
     )
 
 
-def test_live_create_read_patch_and_repeat_create(
+def test_live_adapter_create_read_patch_repeat_returns_consistent_remote_id(
     live_adapter, live_marker: str  # type: ignore[no-untyped-def]
 ) -> None:
-    """Create, read back, optionally patch, and repeat the create.
+    """Adapter-level: create, read back, optionally patch, repeat create.
 
-    The repeat create exercises the provider's duplicate handling: the
-    adapter reads back by email on a definite conflict and must return
-    the same remote id. That returned remote id is the value a CRM sync
-    would store on the crm link (``crm_links.remote_id``); asserting it
-    matches the read-by-id result verifies the link target without any
-    mock.
+    Adapter-level wire smoke only; does not verify intake, worker
+    sync, or persisted crm_links; not A30 evidence. The repeat create
+    exercises the provider's duplicate handling: the adapter reads
+    back by email on a definite conflict and must return the same
+    remote id. Only the local variable holding that returned remote
+    id is compared across calls; no persisted crm_links row, intake
+    submission, or worker flow is verified here.
     """
     adapter = live_adapter()
     email = f"enquirytrail-live-{live_marker}-{uuid.uuid4().hex[:12]}@example.com"
@@ -60,7 +64,6 @@ def test_live_create_read_patch_and_repeat_create(
     )
     assert isinstance(created, FoundContact)
     assert created.remote_id
-    # The remote id that would be stored on the crm link.
     link_remote_id = created.remote_id
 
     by_email = adapter.get_contact_by_email(email, context)
@@ -96,8 +99,11 @@ def test_live_create_read_patch_and_repeat_create(
     assert repeated.remote_id == link_remote_id
 
 
-def test_live_unknown_contact_is_not_found(live_adapter) -> None:  # type: ignore[no-untyped-def]
-    """A lookup for an absent contact returns NotFound, not an error."""
+def test_live_adapter_unknown_contact_is_not_found(live_adapter) -> None:  # type: ignore[no-untyped-def]
+    """Adapter-level: absent-contact lookup returns NotFound.
+
+    Adapter-level wire smoke only; does not verify intake, worker
+    sync, or persisted crm_links; not A30 evidence."""
     email = f"enquirytrail-absent-{uuid.uuid4().hex[:12]}@example.com"
     adapter = live_adapter()
     result = adapter.get_contact_by_email(email, _context())

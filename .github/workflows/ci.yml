@@ -99,6 +99,25 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+  script-tests:
+    # The A26 recovery script targets Windows PowerShell 5.1; its
+    # harnesses fake docker/HTTP boundaries and never touch a real
+    # daemon, database, or stack. This job covers exactly that
+    # platform; it does not claim coverage of pwsh on Linux.
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Run the A26 worker-stop classification harness
+        shell: powershell
+        run: .\scripts\test_a26_worker_state.ps1
+
+      - name: Run the A26 recovery flow harness
+        shell: powershell
+        run: .\scripts\test_a26_recovery_flow.ps1
+
   frontend:
     runs-on: ubuntu-latest
 
@@ -181,6 +200,23 @@ jobs:
       - name: Show compose logs on failure
         if: failure()
         run: docker compose logs
+
+      # Playwright config (e2e/playwright.config.ts) writes the HTML report
+      # to ../playwright-report and traces/screenshots/video (retain-on-failure)
+      # to ../test-results, i.e. the repository root; the e2e/ paths cover the
+      # same outputs if the config is ever resolved from the e2e directory.
+      - name: Upload Playwright diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-diagnostics
+          path: |
+            playwright-report/
+            test-results/
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Stop the compose stack
         if: always()
