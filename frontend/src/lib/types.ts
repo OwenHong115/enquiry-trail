@@ -28,6 +28,9 @@ export type IntegrationItem = Schemas["IntegrationItemOut"];
 export type WorkerHealth = Schemas["WorkerHealthOut"];
 export type Draft = Schemas["DraftOut"];
 export type JobOut = Schemas["JobOut"];
+export type ScenarioRun = Schemas["ScenarioRunOut"];
+export type ScenarioRunSummary = Schemas["ScenarioRunSummaryOut"];
+export type ScenarioList = Schemas["ScenarioListOut"];
 
 // Form state for the public quote form: a view-only shape with no
 // API component of its own (the submit payload is IntakeDataIn).

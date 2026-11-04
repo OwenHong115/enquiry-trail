@@ -688,6 +688,37 @@ export interface components {
             /** Expires In Seconds */
             expires_in_seconds: number;
         };
+        /** FaultOut */
+        FaultOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Scenario Run Id
+             * Format: uuid
+             */
+            scenario_run_id: string;
+            /** Provider */
+            provider: string;
+            /** Mode */
+            mode: string;
+            /** Status */
+            status: string;
+            /** Remaining Uses */
+            remaining_uses: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** HealthOut */
         HealthOut: {
             /** Status */
@@ -895,6 +926,65 @@ export interface components {
         ScenarioCreateIn: {
             /** Scenario Id */
             scenario_id: string;
+        };
+        /** ScenarioListOut */
+        ScenarioListOut: {
+            /** Items */
+            items: components["schemas"]["ScenarioRunSummaryOut"][];
+        };
+        /** ScenarioRunOut */
+        ScenarioRunOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Scenario Id */
+            scenario_id: string;
+            /** Status */
+            status: string;
+            /** Fault Triggered */
+            fault_triggered: boolean;
+            /** Assertion Results */
+            assertion_results: unknown[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Faults
+             * @default []
+             */
+            faults: components["schemas"]["FaultOut"][];
+        };
+        /**
+         * ScenarioRunSummaryOut
+         * @description One run as the list endpoint publishes it: no faults field.
+         */
+        ScenarioRunSummaryOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Scenario Id */
+            scenario_id: string;
+            /** Status */
+            status: string;
+            /** Fault Triggered */
+            fault_triggered: boolean;
+            /** Assertion Results */
+            assertion_results: unknown[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
         };
         /** SessionOut */
         SessionOut: {
@@ -3091,7 +3181,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ScenarioListOut"];
                 };
             };
             /** @description Unauthorized */
@@ -3180,7 +3270,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ScenarioRunOut"];
                 };
             };
             /** @description Unauthorized */

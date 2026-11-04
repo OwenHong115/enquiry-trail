@@ -4,8 +4,9 @@
 // 1. Exports the schema offline via backend/scripts/export_openapi.py
 //    (mock settings; no database connection, no provider calls).
 // 2. Runs the pinned openapi-typescript generator over the export.
-// Re-running must leave src/lib/api-types.ts unchanged; CI and the
-// delivery check verify that with a clean git diff.
+// Re-running must leave src/lib/api-types.ts unchanged. Delivery
+// verification re-runs this command and checks the git diff stays
+// clean; the CI workflow does not run the generator itself.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
