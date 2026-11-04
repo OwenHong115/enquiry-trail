@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { errorMessage } from "../lib/api";
-
-interface ScenarioRun {
-  id: string; scenario_id: string; status: string; fault_triggered: boolean;
-  assertion_results: unknown[]; created_at: string; finished_at: string | null;
-}
+import type { ScenarioList, ScenarioRun, ScenarioRunSummary } from "../lib/types";
 
 const STANDARD = ["demo-happy", "demo-crash", "demo-provider-503", "demo-director-unavailable"];
 
@@ -17,13 +13,13 @@ const FAULT_FOR_SCENARIO: Record<string, { provider: string; mode: string }> = {
 };
 
 export default function DemoPage() {
-  const [runs, setRuns] = useState<ScenarioRun[]>([]);
+  const [runs, setRuns] = useState<ScenarioRunSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const data = await api<{ items: ScenarioRun[] }>("/api/v1/scenarios");
+      const data = await api<ScenarioList>("/api/v1/scenarios");
       setRuns(data.items); setError(null);
     } catch (err) { setError(errorMessage(err)); }
   }, []);

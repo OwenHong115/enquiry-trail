@@ -47,7 +47,9 @@ class FaultOut(BaseModel):
     created_at: datetime
 
 
-class ScenarioRunOut(BaseModel):
+class ScenarioRunSummaryOut(BaseModel):
+    """One run as the list endpoint publishes it: no faults field."""
+
     id: uuid.UUID
     scenario_id: str
     status: str
@@ -55,14 +57,17 @@ class ScenarioRunOut(BaseModel):
     assertion_results: list
     created_at: datetime
     finished_at: datetime | None
+
+
+class ScenarioRunOut(ScenarioRunSummaryOut):
     faults: list[FaultOut] = []
 
 
 class ScenarioListOut(BaseModel):
-    items: list[ScenarioRunOut]
+    items: list[ScenarioRunSummaryOut]
 
 
-@router.post("/api/v1/scenarios", status_code=201)
+@router.post("/api/v1/scenarios", status_code=201, response_model=ScenarioRunOut)
 def create_scenario(body: ScenarioCreateIn, request: Request,
                     session: Session = Depends(get_session),
                     x_csrf_token: str | None = Header(default=None, alias="X-CSRF-Token")):
@@ -71,7 +76,7 @@ def create_scenario(body: ScenarioCreateIn, request: Request,
     return demo_service.create_run(session, scenario_id=body.scenario_id)
 
 
-@router.get("/api/v1/scenarios")
+@router.get("/api/v1/scenarios", response_model=ScenarioListOut)
 def list_scenarios(request: Request, session: Session = Depends(get_session)):
     require_authenticated(request, session)
     session.rollback()

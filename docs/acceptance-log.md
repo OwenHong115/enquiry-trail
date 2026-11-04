@@ -93,6 +93,46 @@ part that is not asserted.
 | C01 | Enum/vocabulary consistency | None in this repository. C01 is an OFFLINE contract check, not live-provider evidence. It is blocked on the missing full authority package. Missing files: authority.md, openapi.yaml, vocabulary.yaml, generate_vocabulary.py, and the contract fixtures. The repository plan package is the partial update package (only PLAN.md, contracts/tdd.yaml, contracts/verification.yaml, docs/build-layout.md, CHANGELOG.md, plus APPLY-STATUS.txt noting the original EnquiryTrail-plan directory rename and the absent leadops parent; D:/Projects/Upwork-Projects/Project-Plans/leadops does not exist). Section ids cited only; no contract text copied. Last re-verified 2026-11-02 | None | NO AUTOMATED EVIDENCE (offline contract check blocked on the missing full authority package) | PENDING OPERATOR |
 | C02 | Fixtures validate against schema | None in this repository. C02 is an OFFLINE contract check, not live-provider evidence. It is blocked on the missing full authority package. Missing files: authority.md, openapi.yaml, vocabulary.yaml, generate_vocabulary.py, and the contract fixtures. The repository plan package is the partial update package (only PLAN.md, contracts/tdd.yaml, contracts/verification.yaml, docs/build-layout.md, CHANGELOG.md, plus APPLY-STATUS.txt noting the original EnquiryTrail-plan directory rename and the absent leadops parent; D:/Projects/Upwork-Projects/Project-Plans/leadops does not exist). The six detail-state shapes are covered behaviourally by API detail tests, but no fixture-validation run exists here. Last re-verified 2026-11-02 | None | NO AUTOMATED EVIDENCE (offline contract check blocked on the missing full authority package) | PENDING OPERATOR |
 
+## Portfolio contract checks (2026-11-04)
+
+Separate from the original-contract rows above: under the
+portfolio section of docs/development-plan.md (2026-11-04), the
+application owns the public HTTP contract for the mock-only
+portfolio delivery, exported from FastAPI's app.openapi() with
+local mock settings. Portfolio results below say nothing about
+original v3.0.1 contract conformance, which remains blocked on
+the unavailable external package, and nothing about operator
+acceptance: every verdict stays PENDING OPERATOR.
+
+- D07 (portfolio): frontend API types are generated from the
+  exported schema by one command, `npm run generate:api` in
+  frontend/ (pinned openapi-typescript 7.13.0; offline export via
+  backend/scripts/export_openapi.py). src/lib/api-types.ts is the
+  generated output; src/lib/types.ts aliases the generated
+  components for the UI and keeps only form/view types
+  hand-written. Regeneration is byte-identical (verified by
+  SHA-256 over two runs). Frontend build, tests and lint pass.
+- C01 (portfolio): backend/tests/unit/test_portfolio_c01_enums.py
+  checks the exported processing_summary, attention and
+  crm.status/crm_status enum sets (detail and list) against the
+  portfolio table by set equality, which detects a missing,
+  extra or renamed value. Result: 2 passed.
+- C02 (portfolio): backend/tests/integration/test_portfolio_c02_detail_states.py
+  drives one synthetic enquiry to each of the six detail states
+  and validates the public JSON against the exported detail
+  schema with a standard Draft 2020-12 validator (jsonschema
+  4.26.0, locked test dependency), local references resolved and
+  format checks enabled, plus the expected state combinations;
+  a mutated non-UUID id is rejected by the same validator.
+  Result: 7 passed. Current intake behaviour
+  (owner and follow-up task created in the intake transaction)
+  is retained and asserted in the processing case.
+- D07 follow-up: the scenario list/create responses used by the
+  demo page are now published in the schema (list items keep
+  omitting faults; the create response keeps the full run), and
+  DemoPage consumes the generated types. Regeneration remains
+  byte-identical.
+
 ## Coverage summary (automated evidence only, not acceptance)
 
 - Items with automated evidence: A01-A29, A31-A33

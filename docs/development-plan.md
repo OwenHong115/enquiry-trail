@@ -1,5 +1,49 @@
 # Development plan — post-P0 snapshot
 
+## Portfolio contract completion (2026-11-04)
+
+This section defines D07, C01 and C02 for the mock-only portfolio
+delivery. The external v3.0 contract package is unavailable. For this
+delivery the application owns the public HTTP contract, exported from
+FastAPI's `app.openapi()` using local mock settings. This supersedes
+the external-input requirement for these three portfolio checks. The
+historical v3.0.1 plan and its original verification record retain
+their scope. Record portfolio results separately from original
+contract conformance and operator acceptance.
+
+| Item | Requirement | Completion evidence |
+| --- | --- | --- |
+| D07 | Export the OpenAPI schema offline, with no database connection or provider calls, and generate the TypeScript API types used by the portfolio UI. Reuse the existing Pydantic request and response models. Keep form state and view-only types separate. | One documented generation command with pinned dependencies, a clean diff after regeneration, and a passing frontend build and existing tests. The UI imports the generated API types through its existing API layer. |
+| C01 | Check the published enum sets for enquiry `processing_summary`, `attention` and `crm.status` against the table below. Use the existing API declarations as the implementation source. Check the list status fields against the same sets and derive the frontend types from that export. | One focused check of the exported schema, including its referenced definitions. The check detects a missing, extra or renamed value. D07's regeneration check covers frontend drift. |
+| C02 | Validate one synthetic enquiry detail response for each of the six summary states against the exported schema for `GET /api/v1/enquiries/{enquiry_id}`. Reuse JSON responses from existing integration cases where available and add only missing cases. | Six validated responses with the expected state combinations below. Validate the public JSON, including required fields and nullability, using the schema with its local references. |
+
+| Field | Expected values |
+| --- | --- |
+| `processing_summary` | `processing`, `ready`, `waiting_retry`, `blocked`, `reconciling`, `failed` |
+| `attention` | `none`, `review_required`, `retry_scheduled`, `notification_uncertain`, `integration_blocked`, `needs_intervention` |
+| `crm.status` / `crm_status` | `pending`, `syncing`, `synced`, `waiting_retry`, `reconciling`, `blocked`, `failed` |
+
+Use the following representative cases with no pending human review.
+These are test cases for the existing behavior. Other valid combinations
+remain governed by the existing read model.
+
+| Case | `processing_summary` | `attention` | `crm.status` |
+| --- | --- | --- | --- |
+| Immediately after intake, before worker claim | `processing` | `none` | `pending` |
+| Prepared and current contact version synced | `ready` | `none` | `synced` |
+| Retry scheduled | `waiting_retry` | `retry_scheduled` | `waiting_retry` |
+| Sync blocked by the provider | `blocked` | `integration_blocked` | `blocked` |
+| Unknown write awaiting readback | `reconciling` | `none` | `reconciling` |
+| Sync job terminal after failure | `failed` | `needs_intervention` | `failed` |
+
+For the processing case, the assigned owner and follow-up task are
+already present, as in the current intake transaction. For the retry
+case, check that `crm.next_attempt_at` is populated. For the ready
+case, check that the linked CRM ID is present. Reuse the existing
+integration fixtures, runners and CI jobs. Keep the work in one small
+PR. The existing routing authority hash, database schema, queue and
+recovery behavior, and mock-only delivery scope remain binding.
+
 ## Snapshot (2026-10-26)
 
 - Snapshot below is historical (2026-10-26). Measured at base
