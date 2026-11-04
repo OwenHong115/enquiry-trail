@@ -120,11 +120,18 @@ acceptance: every verdict stays PENDING OPERATOR.
 - C02 (portfolio): backend/tests/integration/test_portfolio_c02_detail_states.py
   drives one synthetic enquiry to each of the six detail states
   and validates the public JSON against the exported detail
-  schema with local references resolved (required fields,
-  nullability, types, enums), plus the expected state
-  combinations. Result: 6 passed. Current intake behaviour
+  schema with a standard Draft 2020-12 validator (jsonschema
+  4.26.0, locked test dependency), local references resolved and
+  format checks enabled, plus the expected state combinations;
+  a mutated non-UUID id is rejected by the same validator.
+  Result: 7 passed. Current intake behaviour
   (owner and follow-up task created in the intake transaction)
   is retained and asserted in the processing case.
+- D07 follow-up: the scenario list/create responses used by the
+  demo page are now published in the schema (list items keep
+  omitting faults; the create response keeps the full run), and
+  DemoPage consumes the generated types. Regeneration remains
+  byte-identical.
 
 ## Coverage summary (automated evidence only, not acceptance)
 
