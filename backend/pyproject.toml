@@ -22,6 +22,7 @@ leadops-worker = "app.worker.runner:main"
 
 [dependency-groups]
 dev = [
+    "jsonschema[format]==4.26.0",
     "pytest>=8.0",
     "ruff>=0.15",
 ]

@@ -4,8 +4,9 @@ Each case drives one synthetic enquiry to a representative state
 (portfolio table in docs/development-plan.md, 2026-11-04, all with
 no pending human review), reads the public detail JSON, and
 validates it against the exported schema for
-GET /api/v1/enquiries/{enquiry_id} with local references resolved:
-required fields, nullability, types and published enums. Expected
+GET /api/v1/enquiries/{enquiry_id} using a standard JSON Schema
+validator for the dialect OpenAPI 3.1 uses (Draft 2020-12), with
+local references resolved and format checks enabled. Expected
 state combinations are asserted on top of schema validity.
 """
 
@@ -17,6 +18,10 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Resource, Registry
+from referencing.jsonschema import DRAFT202012
 
 from app.bootstrap import create_app
 from app.ports.crm import ProviderError
@@ -43,76 +48,7 @@ ALEX: dict = {
 }
 
 
-# --- Minimal validator over the exported schema (local refs only).
-
-def _resolve(schema: dict, node: dict) -> dict:
-    while "$ref" in node:
-        prefix = "#/components/schemas/"
-        ref = node["$ref"]
-        assert ref.startswith(prefix), ref
-        node = schema["components"]["schemas"][ref[len(prefix):]]
-    return node
-
-
-def _check(schema: dict, node: dict, value: object, path: str) -> list[str]:
-    node = _resolve(schema, node)
-    if "anyOf" in node:
-        errors: list[str] = []
-        for branch in node["anyOf"]:
-            branch_errors = _check(schema, branch, value, path)
-            if not branch_errors:
-                return []
-            errors.extend(branch_errors)
-        return [f"{path}: matched no anyOf branch ({'; '.join(errors)})"]
-    if "allOf" in node:
-        errors = []
-        for branch in node["allOf"]:
-            errors.extend(_check(schema, branch, value, path))
-        return errors
-    errors = []
-    if "enum" in node and value not in node["enum"]:
-        errors.append(f"{path}: {value!r} not in enum {node['enum']}")
-        return errors
-    expected = node.get("type")
-    if expected == "null":
-        if value is not None:
-            errors.append(f"{path}: expected null, got {type(value).__name__}")
-        return errors
-    if value is None:
-        errors.append(f"{path}: null not allowed here")
-        return errors
-    if expected == "string" and not isinstance(value, str):
-        errors.append(f"{path}: expected string")
-    elif expected == "integer" and (
-        not isinstance(value, int) or isinstance(value, bool)
-    ):
-        errors.append(f"{path}: expected integer")
-    elif expected == "number" and (
-        not isinstance(value, (int, float)) or isinstance(value, bool)
-    ):
-        errors.append(f"{path}: expected number")
-    elif expected == "boolean" and not isinstance(value, bool):
-        errors.append(f"{path}: expected boolean")
-    elif expected == "array":
-        if not isinstance(value, list):
-            errors.append(f"{path}: expected array")
-        elif "items" in node:
-            for index, item in enumerate(value):
-                errors.extend(_check(schema, node["items"], item, f"{path}[{index}]"))
-    elif expected == "object":
-        if not isinstance(value, dict):
-            errors.append(f"{path}: expected object")
-        else:
-            for field in node.get("required", []):
-                if field not in value:
-                    errors.append(f"{path}: missing required field {field!r}")
-            for field, subschema in node.get("properties", {}).items():
-                if field in value:
-                    errors.extend(
-                        _check(schema, subschema, value[field], f"{path}.{field}")
-                    )
-    return errors
-
+# --- Schema validation via the standard Draft 2020-12 validator.
 
 def _detail_schema() -> dict:
     settings = Settings(
@@ -122,11 +58,27 @@ def _detail_schema() -> dict:
     return create_app(settings).openapi()
 
 
-def _validate_detail(body: dict) -> None:
+def _detail_validator() -> Draft202012Validator:
     schema = _detail_schema()
+    resource = Resource.from_contents(schema, default_specification=DRAFT202012)
+    # Register the whole export under a document URI so the local
+    # "#/components/schemas/..." references resolve against it.
+    registry = Registry().with_resource("openapi.json", resource)
     operation = schema["paths"]["/api/v1/enquiries/{enquiry_id}"]["get"]
-    node = operation["responses"]["200"]["content"]["application/json"]["schema"]
-    assert _check(schema, node, body, "$") == []
+    ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    return Draft202012Validator(
+        {"$ref": f"openapi.json{ref}"},
+        registry=registry,
+        format_checker=FormatChecker(),
+    )
+
+
+def _validate_detail(body: dict) -> None:
+    errors = sorted(
+        _detail_validator().iter_errors(body),
+        key=lambda error: list(error.absolute_path),
+    )
+    assert errors == []
 
 
 # --- Drivers (existing harness patterns).
@@ -252,3 +204,14 @@ def test_failed_after_terminal_sync_failure(
     )
     body = _detail(api_client, receipt)
     _assert_combo(body, "failed", "needs_intervention", "failed")
+
+
+def test_validator_rejects_non_uuid_id(
+    api_client: TestClient, postgres_db: str
+) -> None:
+    receipt = _submit(api_client)
+    body = _detail(api_client, receipt)
+    _validate_detail(body)
+    body["id"] = "not-a-uuid"
+    errors = list(_detail_validator().iter_errors(body))
+    assert errors != []
